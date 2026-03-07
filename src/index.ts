@@ -1,0 +1,93 @@
+/**
+ * Cloud-Claw — Main Entry Point
+ *
+ * Boots the system:
+ *   1. Validate environment
+ *   2. Connect to PostgreSQL (if configured)
+ *   3. Start Telegram (if configured)
+ *   4. Start Slack (Socket Mode)
+ */
+
+import { env } from './config/env.js';
+import { connectDB } from './database/db.js';
+import { createSlackApp, startSlackApp } from './interfaces/slack.js';
+import { startSentinel } from './sentinel/scheduler.js';
+
+async function main(): Promise<void> {
+    console.log('');
+    console.log('╔══════════════════════════════════════╗');
+    console.log('║       ☁️  Cloud-Claw  v1.0.0          ║');
+    console.log('║     AIOps Hub — Level 1 Foundation   ║');
+    console.log('╚══════════════════════════════════════╝');
+    console.log('');
+
+    // 1. Database (optional)
+    if (env.DATABASE_URL) {
+        await connectDB();
+    } else {
+        console.log('[DB] No DATABASE_URL configured — running without persistence');
+    }
+
+    // 2. Telegram (optional)
+    let telegramBot: Awaited<ReturnType<typeof import('./interfaces/telegram.js').createTelegramBot>> | null = null;
+    if (env.TELEGRAM_BOT_TOKEN) {
+        const { createTelegramBot, startTelegramBot } = await import('./interfaces/telegram.js');
+        telegramBot = createTelegramBot();
+        await startTelegramBot(telegramBot);
+    } else {
+        console.log('[Telegram] No TELEGRAM_BOT_TOKEN configured — skipping');
+    }
+
+    // 3. Slack (primary)
+    const slackApp = createSlackApp();
+    await startSlackApp(slackApp);
+
+    console.log('');
+    console.log('✅ Cloud-Claw is operational. Waiting for messages...');
+    console.log('');
+
+    // 4. Sentinel Heartbeat
+    startSentinel(async (text: string) => {
+        if (!env.PILOT_CHAT_ID) return;
+
+        // Telegram chats are entirely numeric (can be negative for groups)
+        if (telegramBot && /^-?\d+$/.test(env.PILOT_CHAT_ID)) {
+            try {
+                await telegramBot.api.sendMessage(env.PILOT_CHAT_ID, text, { parse_mode: 'Markdown' });
+            } catch (err) {
+                console.error('[Sentinel] Failed to notify via Telegram:', err);
+            }
+        } else if (slackApp) {
+            // Slack channels are alphanumeric (e.g., C1234ABC)
+            try {
+                await slackApp.client.chat.postMessage({
+                    channel: env.PILOT_CHAT_ID,
+                    text
+                });
+            } catch (err) {
+                console.error('[Sentinel] Failed to notify via Slack:', err);
+            }
+        }
+    });
+
+    // Graceful shutdown
+    const shutdown = async (signal: string) => {
+        console.log(`\n[Main] Caught ${signal} — shutting down...`);
+        if (telegramBot) telegramBot.stop();
+        await slackApp.stop();
+        if (env.DATABASE_URL) {
+            const { closeDB } = await import('./database/db.js');
+            await closeDB();
+        }
+        console.log('[Main] Goodbye 👋');
+        process.exit(0);
+    };
+
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+main().catch((err: unknown) => {
+    console.error('[Main] Fatal startup error:', err);
+    process.exit(1);
+});
