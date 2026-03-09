@@ -14,6 +14,12 @@ import { fixNginxConfigTool } from './fix_nginx_config.js';
 import { create_nginx_vhost } from './create_nginx_vhost.js';
 import { sreSearchTool } from './sre_search.js';
 import { fixMemorySearchTool } from '../memory/fix_memory.js';
+import { diagnoseServicesTool } from './diagnose_services.js';
+import { fixWordpressTool } from './fix_wordpress.js';
+import { checkSslTool, renewSslTool } from './ssl_tools.js';
+import { managePhpTool } from './manage_php.js';
+import { repairMysqlTool } from './repair_mysql.js';
+import { cleanupDiskTool } from './cleanup_disk.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -24,6 +30,13 @@ const ALL_TOOLS: Tool[] = [
     executeSshCommandTool,
     sreSearchTool,
     fixMemorySearchTool,
+    diagnoseServicesTool,
+    fixWordpressTool,
+    checkSslTool,
+    renewSslTool,
+    managePhpTool,
+    repairMysqlTool,
+    cleanupDiskTool,
 ];
 
 /** Map for O(1) lookup by name */

@@ -46,6 +46,7 @@ import { checkCommand, requiresApproval, isWriteCommand } from '../security/comm
 import { resumeApprovedSession } from '../hitl/resume.js';
 import type { StatusIndicator } from '../utils/status_indicator.js';
 import { trackUsage } from '../telemetry/usage_tracker.js';
+import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import type {
     IncomingMessage,
     ReplyFn,
@@ -67,6 +68,11 @@ const AUDIT_PATTERNS = [
 const WRITE_TOOLS = new Set([
     'fix_nginx_config',
     'execute_ssh_write',
+    'fix_wordpress',
+    'renew_ssl',
+    'manage_php',
+    'repair_mysql',
+    'cleanup_disk',
 ]);
 
 function isAuditRequest(text: string): boolean {
@@ -84,6 +90,53 @@ function getToolApprovalRequest(
             command: encodeToolApprovalCommand(toolName, { host, file_path: filePath }),
             targetHost: host,
             rationale: 'This action will edit Nginx config and restart Nginx.',
+        };
+    }
+
+    if (toolName === 'fix_wordpress') {
+        const host = String(toolArgs.host ?? 'unknown');
+        return {
+            command: encodeToolApprovalCommand(toolName, { host, site_root: String(toolArgs.site_root ?? '') }),
+            targetHost: host,
+            rationale: 'This action will modify wp-config.php to enable WP_DEBUG.',
+        };
+    }
+
+    if (toolName === 'renew_ssl') {
+        const host = String(toolArgs.host ?? 'unknown');
+        const domain = String(toolArgs.domain ?? 'all');
+        return {
+            command: encodeToolApprovalCommand(toolName, { host, domain }),
+            targetHost: host,
+            rationale: `This action will renew SSL certificate${domain !== 'all' ? ` for ${domain}` : 's'} using Certbot.`,
+        };
+    }
+
+    if (toolName === 'manage_php' && String(toolArgs.action ?? '') === 'switch') {
+        const host = String(toolArgs.host ?? 'unknown');
+        const ver = String(toolArgs.target_version ?? 'unknown');
+        return {
+            command: encodeToolApprovalCommand(toolName, { host, action: 'switch', target_version: ver }),
+            targetHost: host,
+            rationale: `This action will switch PHP-FPM to version ${ver} (stop old, start new).`,
+        };
+    }
+
+    if (toolName === 'repair_mysql' && String(toolArgs.action ?? '') === 'repair') {
+        const host = String(toolArgs.host ?? 'unknown');
+        return {
+            command: encodeToolApprovalCommand(toolName, { host, action: 'repair' }),
+            targetHost: host,
+            rationale: 'This action will run mysqlcheck --auto-repair on all databases.',
+        };
+    }
+
+    if (toolName === 'cleanup_disk' && String(toolArgs.action ?? '') === 'cleanup') {
+        const host = String(toolArgs.host ?? 'unknown');
+        return {
+            command: encodeToolApprovalCommand(toolName, { host, action: 'cleanup' }),
+            targetHost: host,
+            rationale: 'This action will truncate old logs, remove old tmp files, and vacuum journal.',
         };
     }
 
@@ -204,6 +257,21 @@ Available Tools:
 - execute_ssh_command: Run a read-only diagnostic command on the server.
   Use for non-nginx status checks, log reads, version checks.
   Do NOT use this for nginx — use diagnose_nginx instead.
+- diagnose_services: Multi-service health check. Checks MariaDB, MySQL,
+  PHP-FPM, Apache, Redis, disk, memory, uptime. Use for broad diagnostics.
+- fix_wordpress: WordPress white-screen fixer. Auto-detects WP root,
+  enables WP_DEBUG, checks debug.log. Use for WP blank page / 500 errors.
+  Will trigger approval (modifies wp-config.php).
+- check_ssl: Check SSL certificate expiry dates via Certbot. Read-only.
+- renew_ssl: Renew SSL certificates with Certbot. Will trigger approval.
+- manage_php: List installed PHP versions (action=list) or switch
+  PHP-FPM version (action=switch, needs target_version). Switch triggers approval.
+- repair_mysql: MariaDB/MySQL diagnostics (action=diagnose) or repair
+  (action=repair). Repair runs mysqlcheck and triggers approval.
+- cleanup_disk: Disk space analysis (action=analyze) or cleanup
+  (action=cleanup). Cleanup truncates old logs and triggers approval.
+- search_fix_memory: Search past fixes by keyword similarity.
+  Use when diagnosing a new issue to check if it was fixed before.
 
 Always be safe, precise, transparent, and user-friendly.`;
 
@@ -293,6 +361,32 @@ export async function runAgentLoop(
 
     const toolDefinitions = getLLMToolDefinitions();
 
+    // ─── Fix Memory: inject past fixes into system prompt ────────────────────
+    let dynamicPrompt = SYSTEM_PROMPT;
+    if (message.text) {
+        try {
+            const [recent, similar] = await Promise.all([
+                getRecentFixes(3),
+                searchFixes(message.text),
+            ]);
+            const seen = new Set<number>();
+            const combined = [...similar, ...recent].filter(f => {
+                if (seen.has(f.id)) return false;
+                seen.add(f.id);
+                return true;
+            }).slice(0, 5);
+
+            if (combined.length > 0) {
+                dynamicPrompt += '\n\nPAST FIXES — use as reference only if relevant:\n'
+                    + formatFixesForPrompt(combined)
+                    + '\nAlways run diagnostics first. Do not blindly repeat a past fix.';
+                console.log(`[loop] Injected ${combined.length} past fix(es) into system prompt`);
+            }
+        } catch (err) {
+            console.warn('[loop] Fix memory injection failed (non-fatal):', err);
+        }
+    }
+
     while (iteration < MAX_ITERATIONS) {
         iteration++;
         console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
@@ -334,7 +428,7 @@ export async function runAgentLoop(
         try {
             response = await openai.chat.completions.create({
                 model: activeModel,
-                messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+                messages: [{ role: 'system', content: dynamicPrompt }, ...messages],
                 tools: toolDefinitions,
                 tool_choice: toolChoice,
                 temperature: 0.2,
@@ -528,6 +622,14 @@ export async function runAgentLoop(
 
             const toolApproval = getToolApprovalRequest(toolName, toolArgs);
             if (toolApproval) {
+                // Ensure session exists in DB before creating approval (FK constraint)
+                await upsertSession({
+                    id: message.sessionId,
+                    channel: message.channel,
+                    user_id: message.userId,
+                    messages: messages as unknown as Array<Record<string, unknown>>,
+                    iteration,
+                });
                 const saved = await createApproval({
                     session_id: message.sessionId,
                     command: toolApproval.command,
@@ -604,6 +706,14 @@ export async function runAgentLoop(
                         command: rawCommand,
                         host: targetHost,
                     });
+                    // Ensure session exists in DB before creating approval (FK constraint)
+                    await upsertSession({
+                        id: message.sessionId,
+                        channel: message.channel,
+                        user_id: message.userId,
+                        messages: messages as unknown as Array<Record<string, unknown>>,
+                        iteration,
+                    });
                     const saved = await createApproval({
                         session_id: message.sessionId,
                         command: encodedCommand,
@@ -659,6 +769,20 @@ export async function runAgentLoop(
                 // FIX BUG 2: Register this tool as actually having run.
                 executedTools.add(toolName);
                 console.log(`[loop] ✅ TOOL COMPLETE: ${toolName} — success=${result.success}, output length: ${result.output.length} chars`);
+
+                // Save successful fix to memory (non-fatal, fire-and-forget)
+                const SKIP_MEMORY_TOOLS = new Set([
+                    'get_current_time',
+                    'search_fix_memory',
+                    'diagnose_nginx',    // diagnosis only — not a fix
+                ]);
+                if (result.success && !SKIP_MEMORY_TOOLS.has(toolName)) {
+                    void saveFix(
+                        message.text ?? '',
+                        `${toolName}: ${JSON.stringify(toolArgs)}`,
+                        toolName,
+                    ).catch(err => console.warn('[loop] saveFix failed (non-fatal):', err));
+                }
             } catch (toolErr: unknown) {
                 const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
                 console.error(`[loop] ❌ TOOL THREW: ${toolName} — ${errMsg}`);

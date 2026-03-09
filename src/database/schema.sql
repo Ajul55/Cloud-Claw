@@ -1,8 +1,5 @@
--- Cloud-Claw PostgreSQL Schema
--- Run with: psql $DATABASE_URL -f src/database/schema.sql
-
--- Enable pgvector extension for future embedding support
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Cloud-Claw Schema
+-- Run this once: psql -U cloudclaw -d cloudclaw -f src/database/schema.sql
 
 -- ─── Causality Map ────────────────────────────────────────────────────────────
 -- Stores the discovered WordPress hosting stack topology per client/domain.
@@ -80,12 +77,18 @@ CREATE TABLE IF NOT EXISTS usage_log (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ─── Fix Memory (pgvector Level 2) ──────────────────────────────────────────
+-- ─── Fix Memory (Keyword-based Level 2) ─────────────────────────────────────
 -- Stores past problems and solutions to bootstrap LLM debugging.
+-- Uses keyword-based full-text search instead of vector embeddings.
 CREATE TABLE IF NOT EXISTS fix_memory (
   id            SERIAL      PRIMARY KEY,
   issue_text    TEXT        NOT NULL,
   fix_command   TEXT        NOT NULL,
-  embedding     vector(1536), -- text-embedding-3-small dimensionality
+  problem_class TEXT,
+  keywords      TEXT,        -- space-separated keyword tokens for search
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_fix_memory_keywords ON fix_memory USING gin(to_tsvector('english', COALESCE(keywords, '')));
+CREATE INDEX IF NOT EXISTS idx_fix_memory_problem_class ON fix_memory(problem_class);
+CREATE INDEX IF NOT EXISTS idx_fix_memory_created_at ON fix_memory(created_at DESC);

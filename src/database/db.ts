@@ -31,31 +31,45 @@ export function getPool(): pg.Pool {
 
 export async function connectDB(): Promise<void> {
     if (!isDBConfigured()) {
-        console.log('[DB] No DATABASE_URL — skipping connection');
+        console.log('[DB] No DATABASE_URL configured — running without persistence');
         return;
     }
-    const pool = getPool();
-    const client = await pool.connect();
-    client.release();
 
     try {
-        // Expire approvals that were left pending for over 1 hour.
-        await pool.query(`
-            UPDATE approval_queue
-            SET status = 'expired'
-            WHERE status = 'pending'
-            AND requested_at < NOW() - INTERVAL '1 hour'
-        `);
+        const pool = getPool();
+        const client = await pool.connect();
+        client.release();
 
-        const { rows } = await pool.query<{ count: string }>(
-            `SELECT COUNT(*) as count FROM approval_queue WHERE status = 'pending'`
-        );
-        console.log('[DB] Pending approvals on startup:', rows[0]?.count ?? '0');
+        try {
+            // Expire approvals that were left pending for over 1 hour.
+            await pool.query(`
+                UPDATE approval_queue
+                SET status = 'expired'
+                WHERE status = 'pending'
+                AND requested_at < NOW() - INTERVAL '1 hour'
+            `);
+
+            const { rows } = await pool.query<{ count: string }>(
+                `SELECT COUNT(*) as count FROM approval_queue WHERE status = 'pending'`
+            );
+            console.log('[DB] Pending approvals on startup:', rows[0]?.count ?? '0');
+        } catch (err) {
+            console.warn('[DB] Approval cleanup skipped (schema not initialized yet?)');
+            console.warn('[DB] Run the schema first: psql -U cloudclaw -d cloudclaw -f src/database/schema.sql');
+        }
+
+        console.log('[DB] Connected to PostgreSQL ✓');
     } catch (err) {
-        console.warn('[DB] Approval cleanup skipped (schema not initialized yet?):', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[DB] PostgreSQL connection failed: ${msg}`);
+        console.error('[DB] To set up PostgreSQL, run:');
+        console.error('[DB]   1. sudo -u postgres createuser cloudclaw');
+        console.error('[DB]   2. sudo -u postgres createdb -O cloudclaw cloudclaw');
+        console.error('[DB]   3. psql -U cloudclaw -d cloudclaw -f src/database/schema.sql');
+        console.error('[DB] Falling back to in-memory mode.');
+        // Reset pool so isDBConfigured()-guarded code falls back to in-memory
+        _pool = null;
     }
-
-    console.log('[DB] Connected to PostgreSQL ✓');
 }
 
 export async function closeDB(): Promise<void> {

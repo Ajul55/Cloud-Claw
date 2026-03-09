@@ -7,6 +7,7 @@ import {
 import { getToolByName } from '../tools/tool_registry.js';
 import { decodeToolApprovalCommand } from './tool_approval.js';
 import { runAgentLoop } from '../agents/loop.js';
+import { saveFix } from '../memory/fix_memory.js';
 import type { ReplyFn, ApprovalFn } from '../tools/types.js';
 
 export async function resumeApprovedSession(
@@ -80,6 +81,21 @@ export async function resumeApprovedSession(
     try {
         result = await tool.execute(toolArgs);
         console.log(`[resume] ✅ Tool complete: ${toolName} — success=${result.success}`);
+
+        // Save successful fix to memory (non-fatal)
+        if (result.success) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const issueText = (session.messages as any[])
+                .filter((m: any) => m.role === 'user')
+                .map((m: any) => typeof m.content === 'string' ? m.content : '')
+                .join(' ')
+                .slice(0, 300);
+            void saveFix(
+                issueText,
+                `${toolName}: ${JSON.stringify(toolArgs)}`,
+                toolName,
+            ).catch(err => console.warn('[resume] saveFix failed (non-fatal):', err));
+        }
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[resume] Tool execution failed: ${msg}`);
