@@ -36,7 +36,8 @@ export function getLLMClient(): LLMConfig {
     } else if (provider === 'minimax') {
         apiKey = env.MINIMAX_API_KEY || apiKey;
         baseURL = 'https://api.minimaxi.chat/v1';
-        if (!globalModelOverride && env.LLM_MODEL === 'gpt-4o') model = 'MiniMax-Text-01';
+        // MiniMax-M2.5 is optimized for agentic workflows and tool calling
+        if (!globalModelOverride && env.LLM_MODEL === 'gpt-4o') model = 'MiniMax-M2.5';
     } else if (provider === 'anthropic') {
         apiKey = env.ANTHROPIC_API_KEY || apiKey;
         // Anthropic doesn't have a native OpenAI endpoints, typically people use LiteLLM 

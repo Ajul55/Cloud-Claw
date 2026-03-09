@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS approval_queue (
   command     TEXT        NOT NULL,
   target_host TEXT        NOT NULL,
   rationale   TEXT,
+  tool_call_id TEXT,       -- LLM tool_call_id for clean resume
   status      TEXT        NOT NULL DEFAULT 'pending', -- pending | approved | rejected
   requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at  TIMESTAMPTZ

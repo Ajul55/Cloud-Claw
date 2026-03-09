@@ -24,6 +24,7 @@ export function createSlackApp(): SlackAppInstance {
         token: env.SLACK_BOT_TOKEN,
         appToken: env.SLACK_APP_TOKEN,
         socketMode: true,
+        // Using @slack/bolt >= v4 to prevent crashes on 'too_many_websockets' errors
         logLevel: LogLevel.WARN,
     });
 

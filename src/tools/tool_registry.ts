@@ -11,6 +11,7 @@ import { discoveryAgentTool } from './discovery_agent.js';
 import { executeSshCommandTool } from './execute_ssh_command.js';
 import { diagnoseNginxTool } from './diagnose_nginx.js';
 import { fixNginxConfigTool } from './fix_nginx_config.js';
+import { create_nginx_vhost } from './create_nginx_vhost.js';
 import { sreSearchTool } from './sre_search.js';
 import { fixMemorySearchTool } from '../memory/fix_memory.js';
 
@@ -18,6 +19,7 @@ const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
     diagnoseNginxTool,
     fixNginxConfigTool,
+    create_nginx_vhost,
     discoveryAgentTool,
     executeSshCommandTool,
     sreSearchTool,
@@ -35,6 +37,10 @@ export function getToolByName(name: string): Tool | undefined {
 
 export function getAllTools(): Tool[] {
     return ALL_TOOLS;
+}
+
+export function getAllToolNames(): string[] {
+    return ALL_TOOLS.map((t) => t.name);
 }
 
 /** Returns OpenAI-compatible function definitions for the LLM */

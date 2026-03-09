@@ -145,7 +145,7 @@ export interface SessionRecord {
     id: string;
     channel: string;
     user_id: string;
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<Record<string, unknown>>;
     iteration: number;
     created_at: Date;
     updated_at: Date;
@@ -164,11 +164,13 @@ export async function getSession(id: string): Promise<SessionRecord | null> {
 }
 
 export async function upsertSession(
-    session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'messages' | 'iteration'>
+    session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'iteration'> & {
+        messages: Array<Record<string, unknown>>;
+    }
 ): Promise<void> {
     if (!isDBConfigured()) {
         memoryStore.set(session.id, {
-            ...session,
+            ...(session as any),
             created_at: memoryStore.get(session.id)?.created_at ?? new Date(),
             updated_at: new Date(),
         });
@@ -179,8 +181,8 @@ export async function upsertSession(
         `INSERT INTO sessions (id, channel, user_id, messages, iteration)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (id) DO UPDATE SET
-       messages  = EXCLUDED.messages,
-       iteration = EXCLUDED.iteration,
+       messages   = EXCLUDED.messages,
+       iteration  = EXCLUDED.iteration,
        updated_at = NOW()`,
         [session.id, session.channel, session.user_id, JSON.stringify(session.messages), session.iteration]
     );
@@ -198,12 +200,13 @@ export interface ApprovalRecord {
     target_host: string;
     rationale: string | null;
     status: 'pending' | 'approved' | 'rejected' | 'expired';
+    tool_call_id: string;
     requested_at: Date;
     resolved_at: Date | null;
 }
 
 export async function createApproval(
-    data: Pick<ApprovalRecord, 'session_id' | 'command' | 'target_host' | 'rationale'>
+    data: Pick<ApprovalRecord, 'session_id' | 'command' | 'target_host' | 'rationale' | 'tool_call_id'>
 ): Promise<ApprovalRecord> {
     if (!isDBConfigured()) {
         const record: ApprovalRecord = {
@@ -218,10 +221,10 @@ export async function createApproval(
     }
     const pool = getPool();
     const { rows } = await pool.query<ApprovalRecord>(
-        `INSERT INTO approval_queue (session_id, command, target_host, rationale)
-     VALUES ($1, $2, $3, $4)
+        `INSERT INTO approval_queue (session_id, command, target_host, rationale, tool_call_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-        [data.session_id, data.command, data.target_host, data.rationale]
+        [data.session_id, data.command, data.target_host, data.rationale, data.tool_call_id]
     );
     return rows[0];
 }
@@ -246,6 +249,26 @@ export async function resolveApproval(
         [id, status]
     );
     return rows[0] ?? null;
+}
+
+export async function getApprovalById(id: number): Promise<ApprovalRecord | null> {
+    if (!isDBConfigured()) {
+        return memoryApprovals.get(id) ?? null;
+    }
+    const pool = getPool();
+    const { rows } = await pool.query<ApprovalRecord>(
+        'SELECT * FROM approval_queue WHERE id = $1',
+        [id]
+    );
+    return rows[0] ?? null;
+}
+
+export async function updateApprovalStatus(
+    id: number,
+    status: 'approved' | 'rejected',
+    _pilotUserId: string
+): Promise<void> {
+    await resolveApproval(id, status);
 }
 
 export async function getLatestPendingApproval(sessionId: string): Promise<ApprovalRecord | null> {

@@ -104,3 +104,20 @@ export function requiresApproval(command: string): string | null {
     }
     return null;
 }
+
+// ─── Audit Guard: write-command detection ──────────────────────────────────────
+const AUDIT_BLOCKED_PATTERNS = [
+    /systemctl\s+(disable|enable|mask|unmask|restart|stop|start)/i,
+    /sed\s+-i/i,
+    /\brm\s+/i,
+    /\bmv\s+.*\/etc\//i,
+    /tee\s+\//i,
+    /crontab\s+-[er]/i,
+    /apt(-get)?\s+(install|remove|purge)/i,
+    /dpkg\s+(-i|--install|--remove)/i,
+    /ufw\s+(allow|deny|delete|enable|disable)/i,
+];
+
+export function isWriteCommand(command: string): boolean {
+    return AUDIT_BLOCKED_PATTERNS.some(p => p.test(command));
+}

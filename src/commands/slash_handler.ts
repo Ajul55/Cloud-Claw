@@ -1,7 +1,15 @@
-import { getPool } from '../database/db.js';
+import { getPool, isDBConfigured, getApprovalById } from '../database/db.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { setGlobalLLMOverride, getCurrentLLMConfig } from '../llm/provider.js';
 import type { ReplyFn } from '../tools/types.js';
+
+// ─── In-memory store access ─────────────────────────────────────────────────
+// These are imported for in-memory fallback when PostgreSQL is not connected.
+// They read the same Maps that db.ts uses internally.
+import {
+    getSession as getSessionFromDB,
+    getLatestPendingApproval,
+} from '../database/db.js';
 
 export async function handleSlashCommand(command: string, userId: string, replyFn: ReplyFn): Promise<boolean> {
     if (!command.startsWith('/')) {
@@ -50,7 +58,6 @@ export async function handleSlashCommand(command: string, userId: string, replyF
                 }
                 return true;
             case '/help':
-                // Will add /model from Feature 5 later, but documenting it here
                 await replyFn(
                     `🛠 *Cloud-Claw Pilot Commands*\n\n` +
                     `/status — Show agent & approval queue status\n` +
@@ -83,7 +90,19 @@ export async function handleSlashCommand(command: string, userId: string, replyF
     }
 }
 
+// ─── Handler implementations ───────────────────────────────────────────────────
+
 async function handleStatus(replyFn: ReplyFn) {
+    if (!isDBConfigured()) {
+        const cfg = getCurrentLLMConfig();
+        const msg = `📊 *Cloud-Claw Status (In-Memory Mode)*\n\n` +
+            `*LLM:* \`${cfg.provider}\` / \`${cfg.model}\`\n` +
+            `*Database:* Not connected — running in-memory\n` +
+            `*Approvals:* Use the approval cards or \`/approve <id>\` to manage\n\n` +
+            `_Connect PostgreSQL via DATABASE_URL for full status tracking._`;
+        await replyFn(msg, { parse_mode: 'Markdown' });
+        return;
+    }
     const pool = getPool();
     const sessionsRes = await pool.query(`
         SELECT status, COUNT(*) as count 
@@ -111,6 +130,16 @@ async function handleStatus(replyFn: ReplyFn) {
 }
 
 async function handleSessions(replyFn: ReplyFn) {
+    if (!isDBConfigured()) {
+        await replyFn(
+            '📋 *Sessions (In-Memory Mode)*\n\n' +
+            'Session history is not persisted without PostgreSQL.\n' +
+            'Active sessions exist only in memory for this run.\n\n' +
+            '_Connect PostgreSQL via DATABASE_URL for session history._',
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
     const pool = getPool();
     const { rows } = await pool.query(`
         SELECT id, status, problem_class, created_at 
@@ -135,6 +164,14 @@ async function handleSessions(replyFn: ReplyFn) {
 }
 
 async function handleNodes(replyFn: ReplyFn) {
+    if (!isDBConfigured()) {
+        const sshHost = process.env.SSH_HOST ?? 'Not configured';
+        const msg = `🖥 *Nodes (In-Memory Mode)*\n\n` +
+            `Default SSH Target: \`${sshHost}\`\n\n` +
+            '_Node registry requires PostgreSQL. Connect via DATABASE_URL to manage multiple nodes._';
+        await replyFn(msg, { parse_mode: 'Markdown' });
+        return;
+    }
     const pool = getPool();
     const { rows } = await pool.query(`SELECT hostname, ip_address, is_active, last_health_check FROM server_nodes`);
 
@@ -158,8 +195,16 @@ async function handleNodes(replyFn: ReplyFn) {
 }
 
 async function handleUsage(replyFn: ReplyFn) {
+    if (!isDBConfigured()) {
+        await replyFn(
+            '💰 *Usage (In-Memory Mode)*\n\n' +
+            'Token usage is not tracked without PostgreSQL.\n\n' +
+            '_Connect PostgreSQL via DATABASE_URL for cost tracking._',
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
     const pool = getPool();
-    // 24 hours stats
     const { rows } = await pool.query(`
         SELECT 
             COUNT(*) as calls,

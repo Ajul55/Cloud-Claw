@@ -33,6 +33,10 @@ export interface IncomingMessage {
     channel: 'telegram' | 'slack';
     userId: string;
     text: string;
+    /** Tools that were executed during HITL resume before re-entering the loop.
+     *  These are seeded into executedTools so the hallucination detector
+     *  knows they genuinely ran. */
+    resumedTools?: string[];
 }
 
 /** Callback used by the loop to send text back to the user */
