@@ -8,9 +8,12 @@
  *   4. Start Slack (Socket Mode)
  */
 
+import cron from 'node-cron';
 import { env } from './config/env.js';
 import { connectDB } from './database/db.js';
 import { createSlackApp, startSlackApp } from './interfaces/slack.js';
+import { expireStaleApprovals } from './jobs/expire_approvals.js';
+import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
 
 async function main(): Promise<void> {
@@ -45,6 +48,13 @@ async function main(): Promise<void> {
     console.log('');
     console.log('✅ Cloud-Claw is operational. Waiting for messages...');
     console.log('');
+
+    cron.schedule('*/5 * * * *', () => {
+        void expireStaleApprovals();
+    });
+    cron.schedule('*/10 * * * *', () => {
+        void timeoutStaleSessions();
+    });
 
     // 4. Sentinel Heartbeat
     startSentinel(async (text: string) => {

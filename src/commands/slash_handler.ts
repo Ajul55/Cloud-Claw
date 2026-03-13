@@ -2,6 +2,7 @@ import { getPool, isDBConfigured, getApprovalById } from '../database/db.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { setGlobalLLMOverride, getCurrentLLMConfig } from '../llm/provider.js';
 import type { ReplyFn } from '../tools/types.js';
+import { FALLBACK_SERVERS, formatServerTarget, getAllServers } from '../utils/server_registry.js';
 
 // ─── In-memory store access ─────────────────────────────────────────────────
 // These are imported for in-memory fallback when PostgreSQL is not connected.
@@ -111,10 +112,10 @@ async function handleStatus(replyFn: ReplyFn) {
         GROUP BY status
     `);
 
-    let open = 0, inProgress = 0, resolved = 0;
+    let active = 0, timedOut = 0, resolved = 0;
     for (const row of sessionsRes.rows) {
-        if (row.status === 'open') open = parseInt(row.count, 10);
-        else if (row.status === 'in_progress') inProgress = parseInt(row.count, 10);
+        if (row.status === 'active') active = parseInt(row.count, 10);
+        else if (row.status === 'timed_out') timedOut = parseInt(row.count, 10);
         else if (row.status === 'resolved') resolved = parseInt(row.count, 10);
     }
 
@@ -123,7 +124,7 @@ async function handleStatus(replyFn: ReplyFn) {
 
     const msg = `📊 *Cloud-Claw Status*\n\n` +
         `*Sessions (Last 24h):*\n` +
-        `Open: ${open}\nIn Progress: ${inProgress}\nResolved: ${resolved}\n\n` +
+        `Active: ${active}\nTimed Out: ${timedOut}\nResolved: ${resolved}\n\n` +
         `*Approvals:*\n` +
         `Pending HITL requests: ${pending}`;
     await replyFn(msg, { parse_mode: 'Markdown' });
@@ -165,30 +166,24 @@ async function handleSessions(replyFn: ReplyFn) {
 
 async function handleNodes(replyFn: ReplyFn) {
     if (!isDBConfigured()) {
-        const sshHost = process.env.SSH_HOST ?? 'Not configured';
         const msg = `🖥 *Nodes (In-Memory Mode)*\n\n` +
-            `Default SSH Target: \`${sshHost}\`\n\n` +
-            '_Node registry requires PostgreSQL. Connect via DATABASE_URL to manage multiple nodes._';
+            FALLBACK_SERVERS.map((server) => `• ${formatServerTarget(server)}`).join('\n');
         await replyFn(msg, { parse_mode: 'Markdown' });
         return;
     }
-    const pool = getPool();
-    const { rows } = await pool.query(`SELECT hostname, ip_address, is_active, last_health_check FROM server_nodes`);
+    const rows = await getAllServers();
 
     if (rows.length === 0) {
         await replyFn('No nodes registered in the database.');
         return;
     }
 
-    const activeCount = rows.filter(r => r.is_active).length;
+    const activeCount = rows.filter(r => r.active).length;
     let msg = `🖥 *Active Nodes: ${activeCount}/${rows.length}*\n\n`;
 
     for (const row of rows) {
-        const state = row.is_active ? '✅' : '❌';
-        const health = row.last_health_check
-            ? new Date(row.last_health_check).toISOString().replace('T', ' ').substring(0, 16)
-            : 'Never';
-        msg += `${state} *${row.hostname}* (${row.ip_address || 'N/A'})\n   └ Health check: ${health}\n`;
+        const state = row.active ? '✅' : '❌';
+        msg += `${state} *${row.label}* (${row.ip})\n`;
     }
 
     await replyFn(msg, { parse_mode: 'Markdown' });

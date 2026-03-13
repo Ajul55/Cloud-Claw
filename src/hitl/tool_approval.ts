@@ -48,7 +48,8 @@ export function describeApprovalCommand(command: string): {
         return {
             title: 'Apply Nginx Auto-Fix',
             details: [
-                { label: 'Host', value: parsed.args.host ?? 'unknown' },
+                { label: 'Server', value: parsed.args.server_label ?? parsed.args.host ?? 'unknown' },
+                ...(parsed.args.host ? [{ label: 'IP', value: parsed.args.host }] : []),
                 { label: 'File', value: parsed.args.file_path ?? 'unknown' },
             ],
         };

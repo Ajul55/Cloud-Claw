@@ -20,14 +20,20 @@ import { checkSslTool, renewSslTool } from './ssl_tools.js';
 import { managePhpTool } from './manage_php.js';
 import { repairMysqlTool } from './repair_mysql.js';
 import { cleanupDiskTool } from './cleanup_disk.js';
+import { executeSshWriteTool } from './execute_ssh_write.js';
+import { diagnoseDomainTool } from './diagnose_domain.js';
+import { cloudflareCachePurgeTool } from './cloudflare_cache_purge.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
+    diagnoseDomainTool,
+    cloudflareCachePurgeTool,
     diagnoseNginxTool,
     fixNginxConfigTool,
     create_nginx_vhost,
     discoveryAgentTool,
     executeSshCommandTool,
+    executeSshWriteTool,
     sreSearchTool,
     fixMemorySearchTool,
     diagnoseServicesTool,

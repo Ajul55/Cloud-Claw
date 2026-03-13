@@ -1,4 +1,5 @@
 import { sshExec } from '../utils/ssh.js';
+import { formatServerTarget, resolveServerArg } from '../utils/server_registry.js';
 import type { Tool, ToolResult } from './types.js';
 
 interface ParsedNginxError {
@@ -27,33 +28,38 @@ export const diagnoseNginxTool: Tool = {
     parameters: {
         type: 'object',
         properties: {
+            server_label: {
+                type: 'string',
+                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
+                enum: ['production', 'test'],
+            },
             host: {
                 type: 'string',
-                description: 'IP address or hostname of the target server.',
+                description: 'Legacy host/IP override. Prefer server_label.',
             },
         },
-        required: ['host'],
+        required: [],
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const host = String(args.host ?? '').trim();
-        if (!host) {
-            return { success: false, output: 'Error: host is required.' };
-        }
-
         try {
+            const server = await resolveServerArg(args);
             const [statusOutput, testOutput] = await Promise.all([
                 sshExec(
-                    host,
+                    server.ip,
                     `sudo systemctl status nginx --no-pager -l 2>&1 | sed -n '1,80p' || systemctl status nginx --no-pager -l 2>&1 | sed -n '1,80p'`
+                    , { user: server.sshUser, port: server.sshPort }
                 ),
-                sshExec(host, 'sudo nginx -t 2>&1 || nginx -t 2>&1'),
+                sshExec(server.ip, 'sudo nginx -t 2>&1 || nginx -t 2>&1', { user: server.sshUser, port: server.sshPort }),
             ]);
 
             let configContext = 'No config file/line error detected from nginx -t.';
             const parsed = parseConfigError(testOutput);
             if (parsed) {
                 try {
-                    configContext = await sshExec(host, buildContextCommand(parsed.filePath, parsed.line));
+                    configContext = await sshExec(server.ip, buildContextCommand(parsed.filePath, parsed.line), {
+                        user: server.sshUser,
+                        port: server.sshPort,
+                    });
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     configContext = `Failed to fetch config context: ${msg}`;
@@ -61,7 +67,7 @@ export const diagnoseNginxTool: Tool = {
             }
 
             const summary = [
-                `Nginx diagnostics for ${host}`,
+                `Nginx diagnostics for ${formatServerTarget(server)}`,
                 '',
                 '1) Service status (first 80 lines):',
                 '```',
@@ -82,7 +88,7 @@ export const diagnoseNginxTool: Tool = {
             return { success: true, output: summary };
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            return { success: false, output: `Nginx diagnostics failed on ${host}: ${msg}` };
+            return { success: false, output: `Nginx diagnostics failed: ${msg}` };
         }
     },
 };

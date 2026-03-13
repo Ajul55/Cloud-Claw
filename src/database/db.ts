@@ -41,12 +41,12 @@ export async function connectDB(): Promise<void> {
         client.release();
 
         try {
-            // Expire approvals that were left pending for over 1 hour.
+            // Expire approvals that were left pending for over 10 minutes.
             await pool.query(`
                 UPDATE approval_queue
-                SET status = 'expired'
+                SET status = 'expired', resolved_at = NOW()
                 WHERE status = 'pending'
-                AND requested_at < NOW() - INTERVAL '1 hour'
+                AND requested_at < NOW() - INTERVAL '10 minutes'
             `);
 
             const { rows } = await pool.query<{ count: string }>(
@@ -159,10 +159,13 @@ export interface SessionRecord {
     id: string;
     channel: string;
     user_id: string;
+    reply_target: string | null;
     messages: Array<Record<string, unknown>>;
     iteration: number;
+    status?: string;
     created_at: Date;
     updated_at: Date;
+    last_activity?: Date;
 }
 
 export async function getSession(id: string): Promise<SessionRecord | null> {
@@ -178,7 +181,7 @@ export async function getSession(id: string): Promise<SessionRecord | null> {
 }
 
 export async function upsertSession(
-    session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'iteration'> & {
+    session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'iteration' | 'reply_target'> & {
         messages: Array<Record<string, unknown>>;
     }
 ): Promise<void> {
@@ -187,18 +190,23 @@ export async function upsertSession(
             ...(session as any),
             created_at: memoryStore.get(session.id)?.created_at ?? new Date(),
             updated_at: new Date(),
+            last_activity: new Date(),
+            status: 'active',
         });
         return;
     }
     const pool = getPool();
     await pool.query(
-        `INSERT INTO sessions (id, channel, user_id, messages, iteration)
-     VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO sessions (id, channel, user_id, reply_target, messages, iteration)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (id) DO UPDATE SET
-       messages   = EXCLUDED.messages,
-       iteration  = EXCLUDED.iteration,
-       updated_at = NOW()`,
-        [session.id, session.channel, session.user_id, JSON.stringify(session.messages), session.iteration]
+       reply_target  = EXCLUDED.reply_target,
+       messages      = EXCLUDED.messages,
+       iteration     = EXCLUDED.iteration,
+       last_activity = NOW(),
+       status        = 'active',
+       updated_at    = NOW()`,
+        [session.id, session.channel, session.user_id, session.reply_target ?? null, JSON.stringify(session.messages), session.iteration]
     );
 }
 
@@ -245,7 +253,7 @@ export async function createApproval(
 
 export async function resolveApproval(
     id: number,
-    status: 'approved' | 'rejected'
+    status: 'approved' | 'rejected' | 'expired'
 ): Promise<ApprovalRecord | null> {
     if (!isDBConfigured()) {
         const record = memoryApprovals.get(id);
@@ -258,10 +266,15 @@ export async function resolveApproval(
     const { rows } = await pool.query<ApprovalRecord>(
         `UPDATE approval_queue
      SET status = $2, resolved_at = NOW()
-     WHERE id = $1
+     WHERE id = $1 AND status = 'pending'
      RETURNING *`,
         [id, status]
     );
+    if (rows.length === 0) {
+        // If rowCount is 0, it means the approval was already handled
+        // or doesn't exist. Return null to abort the duplicate run.
+        return null;
+    }
     return rows[0] ?? null;
 }
 
@@ -279,10 +292,11 @@ export async function getApprovalById(id: number): Promise<ApprovalRecord | null
 
 export async function updateApprovalStatus(
     id: number,
-    status: 'approved' | 'rejected',
+    status: 'approved' | 'rejected' | 'expired',
     _pilotUserId: string
-): Promise<void> {
-    await resolveApproval(id, status);
+): Promise<boolean> {
+    const record = await resolveApproval(id, status);
+    return record !== null;
 }
 
 export async function getLatestPendingApproval(sessionId: string): Promise<ApprovalRecord | null> {

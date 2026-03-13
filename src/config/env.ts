@@ -13,6 +13,9 @@ const EnvSchema = z.object({
     GROQ_API_KEY: z.string().optional(),
     MINIMAX_API_KEY: z.string().optional(),
     SERPAPI_KEY: z.string().optional(),
+    CLOUDFLARE_API_TOKEN: z.string().optional(),
+    CLOUDFLARE_ZONE_ID: z.string().optional(),
+    CLOUDFLARE_DOMAIN: z.string().optional(),
 
     // Sentinel
     PILOT_CHAT_ID: z.string().optional(),

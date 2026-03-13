@@ -28,6 +28,20 @@ export function buildApprovalMessage(context: Parameters<ApprovalFn>[0]) {
         { type: 'section', text: { type: 'mrkdwn', text: `*Action:*\n${details.title}` } },
         ...(detailLines ? [{ type: 'section', text: { type: 'mrkdwn', text: detailLines } }] : []),
         {
+            type: 'input',
+            block_id: 'rejection_reason_block',
+            optional: true,
+            label: { type: 'plain_text', text: 'Rejection reason (optional)' },
+            element: {
+                type: 'plain_text_input',
+                action_id: 'rejection_reason_input',
+                placeholder: {
+                    type: 'plain_text',
+                    text: 'e.g. wrong server, use port 6556 instead, too risky'
+                }
+            }
+        },
+        {
             type: 'actions',
             elements: [
                 { type: 'button', text: { type: 'plain_text', text: '✅ Proceed' }, style: 'primary', action_id: 'approve_command', value: String(approvalId) },

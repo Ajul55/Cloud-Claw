@@ -7,7 +7,7 @@
  * Flow:
  *   User message → LLM → tool call → result → LLM → ...
  *   If fix proposed (Tier-3) → emit approval request → wait
- *   max_iterations = 10 (loop guard)
+ *   max_iterations = 15 (loop guard)
  *
  * ─── BUGS FIXED IN THIS VERSION ─────────────────────────────────────────────
  *
@@ -45,20 +45,103 @@ import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 import { checkCommand, requiresApproval, isWriteCommand } from '../security/command_filter.js';
 import { SYSTEM_PROMPT } from '../config/system_prompt.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
+import { touchSession } from '../jobs/timeout_sessions.js';
 import type { StatusIndicator } from '../utils/status_indicator.js';
 import { trackUsage } from '../telemetry/usage_tracker.js';
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
+import {
+    getAllServers,
+    getServerByIp,
+    getServerByLabel,
+    isAllServersRequest,
+    resolveAllServers,
+    resolveServerFromMessage,
+} from '../utils/server_registry.js';
 import type {
     IncomingMessage,
     ReplyFn,
     ApprovalFn,
 } from '../tools/types.js';
 
-const MAX_ITERATIONS = 10;
+const MAX_ITERATIONS = 15;
 
 function containsInternalToolSyntax(text: string): boolean {
     return /\bfunctions\.[a-z_]+\s*\(/i.test(text)
-        || /```(?:typescript|json)?[\s\S]*functions\.[a-z_]+\s*\(/i.test(text);
+        || /```(?:typescript|json)?[\s\S]*functions\.[a-z_]+\s*\(/i.test(text)
+        || /<minimax:tool_call>/i.test(text)
+        || /<\/minimax:tool_call>/i.test(text)
+        || /<invoke\s+name=/i.test(text)
+        || /<parameter\s+name=/i.test(text);
+}
+
+function getMessageText(content: OpenAI.ChatCompletionMessageParam['content'] | null | undefined): string {
+    if (typeof content === 'string') {
+        return content;
+    }
+
+    if (!Array.isArray(content)) {
+        return '';
+    }
+
+    return content
+        .map((part: any) => {
+            if (typeof part === 'string') return part;
+            if (part?.type === 'text' && typeof part.text === 'string') return part.text;
+            return '';
+        })
+        .filter(Boolean)
+        .join(' ');
+}
+
+function summarizeText(text: string, maxLength = 220): string {
+    const collapsed = text.replace(/\s+/g, ' ').trim();
+    if (!collapsed) {
+        return '';
+    }
+
+    return collapsed.length > maxLength
+        ? `${collapsed.slice(0, maxLength - 3).trimEnd()}...`
+        : collapsed;
+}
+
+function buildProgressSummary(messages: OpenAI.ChatCompletionMessageParam[]): string {
+    const summaryLines: string[] = [];
+
+    for (let index = messages.length - 1; index >= 0 && summaryLines.length < 5; index--) {
+        const msg = messages[index] as any;
+
+        if (msg.role === 'tool') {
+            const text = summarizeText(getMessageText(msg.content), 220);
+            if (text) summaryLines.push(`- Tool result: ${text}`);
+            continue;
+        }
+
+        if (msg.role === 'assistant' && typeof msg.content === 'string' && !containsInternalToolSyntax(msg.content)) {
+            const text = summarizeText(msg.content, 160);
+            if (text) summaryLines.push(`- Assistant: ${text}`);
+            continue;
+        }
+
+        if (msg.role === 'user') {
+            const text = summarizeText(getMessageText(msg.content), 160);
+            if (text) summaryLines.push(`- Pilot: ${text}`);
+        }
+    }
+
+    return summaryLines.length > 0
+        ? summaryLines.reverse().join('\n')
+        : '- No concrete findings captured yet.';
+}
+
+function extractDomains(text: string): string[] {
+    const matches = text.match(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/gi) ?? [];
+    const unique = new Set<string>();
+
+    for (const match of matches) {
+        unique.add(match.toLowerCase());
+    }
+
+    return [...unique];
 }
 
 // ─── Audit Guard ───────────────────────────────────────────────────────────────
@@ -69,6 +152,7 @@ const AUDIT_PATTERNS = [
 const WRITE_TOOLS = new Set([
     'fix_nginx_config',
     'execute_ssh_write',
+    'cloudflare_cache_purge',
     'fix_wordpress',
     'renew_ssl',
     'manage_php',
@@ -80,6 +164,32 @@ function isAuditRequest(text: string): boolean {
     return AUDIT_PATTERNS.some(p => p.test(text));
 }
 
+function encodeApprovalArgs(toolArgs: Record<string, unknown>): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(toolArgs).map(([key, value]) => {
+            if (Array.isArray(value) || (value && typeof value === 'object')) {
+                return [key, JSON.stringify(value)];
+            }
+            return [key, String(value ?? '')];
+        })
+    );
+}
+
+function getTargetHostDisplay(toolArgs: Record<string, unknown>): string {
+    const label = String(toolArgs.server_label ?? '').trim();
+    const host = String(toolArgs.host ?? '').trim();
+
+    if (label && host) return `${label} (${host})`;
+    if (host) return host;
+    if (label) return label;
+    return 'unknown';
+}
+
+function toolSupportsServerRouting(tool: { parameters: { properties: Record<string, unknown> } }): boolean {
+    return Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'server_label')
+        || Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'host');
+}
+
 function getToolApprovalRequest(
     toolName: string,
     toolArgs: Record<string, unknown>
@@ -88,8 +198,8 @@ function getToolApprovalRequest(
         const host = String(toolArgs.host ?? 'unknown');
         const filePath = String(toolArgs.file_path ?? 'unknown');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, file_path: filePath }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, file_path: filePath })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: 'This action will edit Nginx config and restart Nginx.',
         };
     }
@@ -97,8 +207,8 @@ function getToolApprovalRequest(
     if (toolName === 'fix_wordpress') {
         const host = String(toolArgs.host ?? 'unknown');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, site_root: String(toolArgs.site_root ?? '') }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, site_root: String(toolArgs.site_root ?? '') })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: 'This action will modify wp-config.php to enable WP_DEBUG.',
         };
     }
@@ -107,8 +217,8 @@ function getToolApprovalRequest(
         const host = String(toolArgs.host ?? 'unknown');
         const domain = String(toolArgs.domain ?? 'all');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, domain }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, domain })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: `This action will renew SSL certificate${domain !== 'all' ? ` for ${domain}` : 's'} using Certbot.`,
         };
     }
@@ -117,8 +227,8 @@ function getToolApprovalRequest(
         const host = String(toolArgs.host ?? 'unknown');
         const ver = String(toolArgs.target_version ?? 'unknown');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, action: 'switch', target_version: ver }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'switch', target_version: ver })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: `This action will switch PHP-FPM to version ${ver} (stop old, start new).`,
         };
     }
@@ -126,8 +236,8 @@ function getToolApprovalRequest(
     if (toolName === 'repair_mysql' && String(toolArgs.action ?? '') === 'repair') {
         const host = String(toolArgs.host ?? 'unknown');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, action: 'repair' }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'repair' })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: 'This action will run mysqlcheck --auto-repair on all databases.',
         };
     }
@@ -135,9 +245,39 @@ function getToolApprovalRequest(
     if (toolName === 'cleanup_disk' && String(toolArgs.action ?? '') === 'cleanup') {
         const host = String(toolArgs.host ?? 'unknown');
         return {
-            command: encodeToolApprovalCommand(toolName, { host, action: 'cleanup' }),
-            targetHost: host,
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'cleanup' })),
+            targetHost: getTargetHostDisplay(toolArgs),
             rationale: 'This action will truncate old logs, remove old tmp files, and vacuum journal.',
+        };
+    }
+
+    if (toolName === 'cloudflare_cache_purge') {
+        const mode = String(toolArgs.mode ?? 'url');
+        let targetHost = `Cloudflare (${env.CLOUDFLARE_DOMAIN ?? 'configured zone'})`;
+        if (mode === 'url') {
+            const urlsRaw = toolArgs.urls;
+            const urls = Array.isArray(urlsRaw)
+                ? urlsRaw.map((value) => String(value))
+                : String(urlsRaw ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+            targetHost = urls.join(', ') || targetHost;
+        }
+
+        return {
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs(toolArgs)),
+            targetHost,
+            rationale: mode === 'everything'
+                ? `This action will purge the entire Cloudflare cache for ${env.CLOUDFLARE_DOMAIN ?? 'the configured zone'}.`
+                : `This action will purge Cloudflare cache for ${targetHost}.`,
+        };
+    }
+
+    const tool = getToolByName(toolName);
+    if (tool?.approvalTier === 3) {
+        return {
+            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs(toolArgs)),
+            targetHost: getTargetHostDisplay(toolArgs),
+            rationale: tool.getRationale?.(toolArgs)
+                ?? `This action will run ${toolName} on ${getTargetHostDisplay(toolArgs)}.`,
         };
     }
 
@@ -158,12 +298,55 @@ export async function runAgentLoop(
     // 1. Load or create session
     const session = await getSession(message.sessionId);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messages: OpenAI.ChatCompletionMessageParam[] = (session?.messages ?? []) as any;
+    let messages: OpenAI.ChatCompletionMessageParam[] = (session?.messages ?? []) as any;
+
+    messages = messages.map(msg => {
+        const clean: any = { ...msg };
+        // Claude rejects "name" on assistant messages
+        if (clean.role === 'assistant' && ('name' in clean)) {
+            delete clean.name;
+        }
+        // Claude rejects "audio_content"
+        if ('audio_content' in clean) {
+            delete clean.audio_content;
+        }
+        // Claude rejects "index" field inside tool_calls (which MiniMax adds)
+        if (clean.tool_calls && Array.isArray(clean.tool_calls)) {
+            // Check for malformed tool_calls that are missing an ID (MiniMax hallucination)
+            const isBroken = clean.tool_calls.some((tc: any) => !tc.id);
+            if (isBroken) {
+                console.warn('[loop] Found broken tool_calls without an ID in history, removing them.');
+                delete clean.tool_calls;
+            } else {
+                clean.tool_calls = clean.tool_calls.map((tc: any) => {
+                    const cleanTc = { ...tc };
+                    if ('index' in cleanTc) delete cleanTc.index;
+                    return cleanTc;
+                });
+            }
+        }
+        // Ensure content is string unless it's an array of content blocks (or undefined/null)
+        if (clean.role === 'tool' && clean.content !== undefined && clean.content !== null && typeof clean.content !== 'string') {
+            clean.content = String(clean.content);
+        }
+        return clean as OpenAI.ChatCompletionMessageParam;
+    });
+
+    const priorConversationCount = messages.filter(
+        (m: any) => m.role === 'user' || m.role === 'assistant'
+    ).length;
+    const priorToolLines = messages
+        .filter((m: any) => m.role === 'tool')
+        .map((m: any) => summarizeText(getMessageText(m.content).split('\n')[0] ?? '', 160))
+        .filter(Boolean)
+        .slice(-5)
+        .join('\n');
 
     // 2. Append user message if present
     if (message.text) {
         messages.push({ role: 'user', content: message.text });
     }
+    touchSession(message.sessionId);
 
     let iteration = 0;
     let internalSyntaxRetryUsed = false;
@@ -210,25 +393,46 @@ export async function runAgentLoop(
     }
 
     // Pre-compute whether this request needs tools (used for tool_choice logic).
-    const requiresTool = /\b(nginx|mariadb|mysql|postgres|redis|php|apache|fix|diagnose|status|running|install|restart|ssh|server|error|failed|resolve|issue|proceed|yes|confirm|do\s+it|apply|check|db|database|memory|disk|cpu|down|up|broken|crash|500|502|503|504|start|stop|service|process|log|config)\b/i
-        .test([
-            message.text ?? '',
-            ...messages.slice(-6).map((m) => typeof m.content === 'string' ? m.content : '')
-        ].join(' '));
+    const mentionedDomains = extractDomains(message.text ?? '');
+    const requiresTool = mentionedDomains.length > 0
+        || /\b(nginx|mariadb|mysql|postgres|redis|php|apache|fix|diagnose|status|running|install|restart|ssh|server|error|failed|resolve|issue|proceed|yes|confirm|do\s+it|apply|check|db|database|memory|disk|cpu|down|up|broken|crash|500|502|503|504|start|stop|service|process|log|config|domain|subdomain|dns|cloudflare|cache|proxy|routing|route|mapping)\b/i
+            .test(message.text ?? '');
+
+    const requiresDomainDiagnosis = mentionedDomains.length > 0
+        && /\b(nginx|site|website|domain|subdomain|dns|cloudflare|proxy|proxy_pass|content|cache|refresh|serving|mapping|route|routing|wrong|old|showing)\b/i
+            .test(message.text ?? '');
+    const requiresCloudflarePurge = mentionedDomains.length > 0
+        && /\b(purge|clear|flush)\b/i.test(message.text ?? '')
+        && /\bcloudflare\b/i.test(message.text ?? '')
+        && /\bcache\b/i.test(message.text ?? '');
 
     // Detect if this is an nginx/website query — forces diagnose_nginx on first call.
-    const requiresNginx = /\b(nginx|website|web\s*server|site\s+(is\s+)?(down|broken|error|not\s+working|offline|unreachable))\b/i
+    const requiresNginx = !requiresDomainDiagnosis
+        && /\b(nginx|website|web\s*server|site\s+(is\s+)?(down|broken|error|not\s+working|offline|unreachable))\b/i
         .test(message.text ?? '');
 
-    // ─── Session trimming ──────────────────────────────────────────────────────
+    // ─── Session trimming & Sanitation ─────────────────────────────────────────
+    // Sanitize any existing corrupted history (e.g., from previous bad trims)
+    // where a tool response was left orphaned without its assistant tool_call.
+    while (messages.length > 0 && messages[0].role === 'tool') {
+        messages.shift();
+        console.log('[loop] Shifted orphaned tool message from beginning of history');
+    }
+
     // If the user is sending a new message (not a resume) and the session has many
     // old messages, trim to prevent context pollution from previous conversations.
-    // Keep: system prompt (injected separately) + last 6 messages + the new user msg.
+    // Keep: system prompt (injected separately) + last few messages + the new user msg.
     if (message.text && !message.resumedTools && messages.length > 20) {
-        const trimmed = messages.slice(-6);
+        let startIndex = messages.length - 6;
+        // Move backwards to find a clean boundary (user message) so we don't sever
+        // an assistant tool_call from its tool responses.
+        while (startIndex > 0 && messages[startIndex].role !== 'user') {
+            startIndex--;
+        }
+        const trimmed = messages.slice(startIndex);
         messages.length = 0;
         messages.push(...trimmed);
-        console.log(`[loop] Trimmed session from ${trimmed.length + messages.length} to ${messages.length} messages`);
+        console.log(`[loop] Trimmed session safely to ${messages.length} messages`);
     }
 
     const toolDefinitions = getLLMToolDefinitions();
@@ -257,11 +461,24 @@ export async function runAgentLoop(
         }
     }
 
-    const dynamicPrompt = SYSTEM_PROMPT({
-        sshHost: env.SSH_HOST ?? '',
-        sshUser: env.SSH_USER,
+    let dynamicPrompt = SYSTEM_PROMPT({
+        sshHost: '139.84.130.63',
+        sshUser: 'root',
         pastFixes: pastFixesStr || undefined
     });
+
+    const shouldPauseForClarification = priorConversationCount > 6
+        && !/^(yes|yep|correct|that'?s correct|this is correct|continue|keep going|proceed|go ahead)\b/i.test(normalized);
+
+    if (shouldPauseForClarification) {
+        dynamicPrompt = `Before acting, summarize: (1) what the desired state is, (2) what has already been tried,
+(3) your root cause hypothesis. Ask Pilot to confirm before making any changes.
+
+Recent tool attempts:
+${priorToolLines || 'No prior tool outputs recorded.'}
+
+` + dynamicPrompt;
+    }
 
     while (iteration < MAX_ITERATIONS) {
         iteration++;
@@ -284,14 +501,32 @@ export async function runAgentLoop(
         const lastMsg = messages[messages.length - 1];
         const isMidChain = lastMsg?.role === 'tool';
         const isFirstToolCall = requiresTool && executedTools.size === 0;
+
+        // BUG FIX: On resume, the last message is a 'tool' result. If we force
+        // 'required' here, the LLM is forced to call *another* tool even if it
+        // has enough information to reply. We should only force 'required' mid-chain
+        // if we are explicitly chaining (e.g. diagnose -> fix). If the LLM just ran
+        // a fix, it should be allowed to summarize instead of being forced to call again.
+        // We'll trust the LLM's own decision ('auto') if we are mid-chain and it's not
+        // the very first interaction.
         const shouldRequireTool = toolDefinitions.length > 0 && (isMidChain || isFirstToolCall);
 
         let toolChoice: OpenAI.ChatCompletionToolChoiceOption;
-        if (requiresNginx && executedTools.size === 0 && !executedTools.has('diagnose_nginx')) {
+        if (shouldPauseForClarification && iteration === 1) {
+            toolChoice = 'none';
+            console.log('[loop] Forcing tool_choice: none (long conversation clarification gate)');
+        } else if (requiresCloudflarePurge && executedTools.size === 0 && !executedTools.has('cloudflare_cache_purge')) {
+            toolChoice = { type: 'function', function: { name: 'cloudflare_cache_purge' } };
+            console.log('[loop] Forcing tool_choice: cloudflare_cache_purge (explicit cache purge request detected)');
+        } else if (requiresDomainDiagnosis && executedTools.size === 0 && !executedTools.has('diagnose_domain')) {
+            toolChoice = { type: 'function', function: { name: 'diagnose_domain' } };
+            console.log('[loop] Forcing tool_choice: diagnose_domain (domain routing query detected)');
+        } else if (requiresNginx && executedTools.size === 0 && !executedTools.has('diagnose_nginx')) {
             // Force diagnose_nginx on first call for nginx/website queries
             toolChoice = { type: 'function', function: { name: 'diagnose_nginx' } };
             console.log('[loop] Forcing tool_choice: diagnose_nginx (nginx/website query detected)');
         } else {
+            // Revert back to 'required' for MiniMax compatibility
             toolChoice = shouldRequireTool ? 'required' : 'auto';
         }
         // ──────────────────────────────────────────────────────────────────────
@@ -301,7 +536,26 @@ export async function runAgentLoop(
         const reqStart = Date.now();
         const { client: openai, model: activeModel } = getLLMClient();
 
+        // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain,
+        // which guarantees we never hit the 2013 "tool id not found" provider error.
+        const validToolIds = new Set<string>();
+        messages = messages.filter((msg: any) => {
+            if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+                // Register valid IDs
+                msg.tool_calls.forEach((tc: any) => {
+                    if (tc.id) validToolIds.add(tc.id);
+                });
+            } else if (msg.role === 'tool') {
+                if (!msg.tool_call_id || !validToolIds.has(msg.tool_call_id)) {
+                    console.warn(`[loop] Dropping orphaned tool message with ID ${msg.tool_call_id}`);
+                    return false; // Safely strip this from the request
+                }
+            }
+            return true;
+        });
+
         try {
+            console.log('[loop] Outgoing messages to API:', JSON.stringify(messages, null, 2));
             response = await openai.chat.completions.create({
                 model: activeModel,
                 messages: [{ role: 'system', content: dynamicPrompt }, ...messages],
@@ -365,7 +619,7 @@ export async function runAgentLoop(
                 messages.push({
                     role: 'user',
                     content:
-                        'Do not output internal tool syntax (like functions.execute_ssh_command). ' +
+                        'Do not output internal tool syntax (like functions.execute_ssh_command or <minimax:tool_call><invoke ...>). ' +
                         'Call tools via the tool API and then provide a normal user-facing response.',
                 });
                 continue;
@@ -434,15 +688,12 @@ export async function runAgentLoop(
 
             // If the model still avoided tool use on the very first call while tools
             // are required, it means tool_choice:'required' failed (provider issue).
-            // Surface a clear error rather than silently giving a hallucinated answer.
+            // This is often because the LLM lacks the specific tool requested (e.g. write access).
+            // We should let the user see the LLM's explanation rather than fabricating an SSH error.
             if (requiresTool && executedTools.size === 0) {
-                console.error('[loop] LLM avoided tool call despite tool_choice:required — possible provider issue');
-                await indicator?.stop();
-                await onReply(
-                    '⚠️ I was unable to connect to the server. ' +
-                    'Please check that SSH_HOST is configured and the server is reachable.'
-                );
-                break;
+                console.error('[loop] LLM avoided tool call despite tool_choice:required — possible provider issue or missing tool');
+                console.error('[loop] Raw text returned instead of tool call:', text);
+                // Fall through to show the user the text, but log it.
             }
 
             await indicator?.stop();
@@ -485,6 +736,62 @@ export async function runAgentLoop(
             console.log(`[loop] Tool called: ${toolName}`, toolArgs);
             await indicator?.update(`⚙️ Running ${toolName}... please wait.`);
 
+            const tool = getToolByName(toolName);
+            if (!tool) {
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    content: `Error: Tool "${toolName}" not found in registry.`,
+                });
+                continue;
+            }
+
+            if (toolSupportsServerRouting(tool)) {
+                const requestedAllServers = String(toolArgs.server_label ?? '').trim().toLowerCase() === 'all'
+                    || isAllServersRequest(message.text ?? '');
+
+                if (requestedAllServers) {
+                    toolArgs.server_label = 'all';
+                } else {
+                    const explicitLabel = String(toolArgs.server_label ?? '').trim();
+                    const explicitHost = String(toolArgs.host ?? '').trim();
+
+                    if (explicitLabel) {
+                        const server = await getServerByLabel(explicitLabel);
+                        if (!server) {
+                            messages.push({
+                                role: 'tool',
+                                tool_call_id: toolCall.id,
+                                content: `Error: Server "${explicitLabel}" not found. Available servers: production (139.84.130.63) and test (65.20.82.177).`,
+                            });
+                            continue;
+                        }
+                        toolArgs.server_label = server.label;
+                        toolArgs.host = server.ip;
+                    } else if (explicitHost) {
+                        const server = await getServerByIp(explicitHost);
+                        if (server) {
+                            toolArgs.server_label = server.label;
+                            toolArgs.host = server.ip;
+                        }
+                    } else {
+                        const server = await resolveServerFromMessage(message.text ?? '');
+                        if (!server && (await getAllServers()).length > 1) {
+                            messages.push({
+                                role: 'tool',
+                                tool_call_id: toolCall.id,
+                                content: 'Error: Server target is ambiguous. Ask the Pilot which server to use: production (139.84.130.63) or test (65.20.82.177). Do not assume.',
+                            });
+                            continue;
+                        }
+                        if (server) {
+                            toolArgs.server_label = server.label;
+                            toolArgs.host = server.ip;
+                        }
+                    }
+                }
+            }
+
             // AUDIT GUARD — code-level, cannot be overridden by LLM
             if (isAuditRequest(message.text ?? '') && WRITE_TOOLS.has(toolName)) {
                 console.warn(`[loop] AUDIT GUARD blocked write tool "${toolName}" during audit`);
@@ -496,6 +803,15 @@ export async function runAgentLoop(
                 continue;
             }
 
+            if (String(toolArgs.server_label ?? '').toLowerCase() === 'all' && WRITE_TOOLS.has(toolName)) {
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    content: 'Error: Write operations must target a single server. Choose either production (139.84.130.63) or test (65.20.82.177).',
+                });
+                continue;
+            }
+
             const toolApproval = getToolApprovalRequest(toolName, toolArgs);
             if (toolApproval) {
                 // Ensure session exists in DB before creating approval (FK constraint)
@@ -503,6 +819,7 @@ export async function runAgentLoop(
                     id: message.sessionId,
                     channel: message.channel,
                     user_id: message.userId,
+                    reply_target: message.replyTarget ?? session?.reply_target ?? null,
                     messages: messages as unknown as Array<Record<string, unknown>>,
                     iteration,
                 });
@@ -529,7 +846,8 @@ export async function runAgentLoop(
 
                 await onReply(
                     '🔐 *Approval Required*\n\n'
-                    + `I need to edit \`${toolApproval.targetHost}\` to fix Nginx.\n`
+                    + `Target: \`${toolApproval.targetHost}\`\n`
+                    + `${toolApproval.rationale}\n`
                     + 'Please click *Proceed* or *Reject* on the card above.\n'
                     + '_If no card appeared, the approval system has an error — check the server logs._'
                 );
@@ -537,10 +855,23 @@ export async function runAgentLoop(
                 await indicator?.update('⏳ Awaiting your decision (Proceed/Reject)...');
                 await indicator?.stop(true);
 
+                // FIX BUG (tool id not found): Satisfy any remaining tool calls in this batch
+                // before pausing, otherwise the LLM API throws 400 on resume.
+                for (const remaining of choice.message.tool_calls) {
+                    if (remaining.id !== toolCall.id && !messages.some(m => m.role === 'tool' && 'tool_call_id' in m && m.tool_call_id === remaining.id)) {
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: remaining.id,
+                            content: `Cancelled: Execution paused because '${toolName}' requires human approval.`,
+                        });
+                    }
+                }
+
                 await upsertSession({
                     id: message.sessionId,
                     channel: message.channel,
                     user_id: message.userId,
+                    reply_target: message.replyTarget ?? session?.reply_target ?? null,
                     messages: messages as unknown as Array<Record<string, unknown>>,
                     iteration,
                 });
@@ -576,17 +907,18 @@ export async function runAgentLoop(
                 // Check if it needs Tier-3 approval
                 const approvalReason = requiresApproval(rawCommand);
                 if (approvalReason) {
-                    const targetHost = (toolArgs.host as string) ?? 'unknown';
+                    const targetHost = getTargetHostDisplay(toolArgs);
                     // Encode as TOOL: format so resume.ts can decode it later
-                    const encodedCommand = encodeToolApprovalCommand(toolName, {
+                    const encodedCommand = encodeToolApprovalCommand(toolName, encodeApprovalArgs({
+                        ...toolArgs,
                         command: rawCommand,
-                        host: targetHost,
-                    });
+                    }));
                     // Ensure session exists in DB before creating approval (FK constraint)
                     await upsertSession({
                         id: message.sessionId,
                         channel: message.channel,
                         user_id: message.userId,
+                        reply_target: message.replyTarget ?? session?.reply_target ?? null,
                         messages: messages as unknown as Array<Record<string, unknown>>,
                         iteration,
                     });
@@ -614,10 +946,23 @@ export async function runAgentLoop(
                     await indicator?.update("⏳ Awaiting Pilot approval...");
                     await indicator?.stop(true);
 
+                    // FIX BUG (tool id not found): Satisfy any remaining tool calls in this batch
+                    // before pausing, otherwise the LLM API throws 400 on resume.
+                    for (const remaining of choice.message.tool_calls) {
+                        if (remaining.id !== toolCall.id && !messages.some(m => m.role === 'tool' && 'tool_call_id' in m && m.tool_call_id === remaining.id)) {
+                            messages.push({
+                                role: 'tool',
+                                tool_call_id: remaining.id,
+                                content: `Cancelled: Execution paused because '${toolName}' requires human approval.`,
+                            });
+                        }
+                    }
+
                     await upsertSession({
                         id: message.sessionId,
                         channel: message.channel,
                         user_id: message.userId,
+                        reply_target: message.replyTarget ?? session?.reply_target ?? null,
                         messages: messages as unknown as Array<Record<string, unknown>>,
                         iteration,
                     });
@@ -625,23 +970,33 @@ export async function runAgentLoop(
                 }
             }
 
-            // Execute tool
-            const tool = getToolByName(toolName);
-            if (!tool) {
-                messages.push({
-                    role: 'tool',
-                    tool_call_id: toolCall.id,
-                    content: `Error: Tool "${toolName}" not found in registry.`,
-                });
-                continue;
-            }
-
             // FIX BUG 4: Wrap tool execution in try/catch so a thrown error
             // doesn't leak out of the loop without persisting the session.
             let result: { success: boolean; output: string };
             try {
-                console.log(`[loop] ⚡ EXECUTING TOOL: ${toolName} on host: ${String(toolArgs.host ?? 'N/A')}`);
-                result = await tool.execute(toolArgs);
+                console.log(`[loop] ⚡ EXECUTING TOOL: ${toolName} on target: ${String(toolArgs.server_label ?? toolArgs.host ?? 'N/A')}`);
+                if (toolArgs.server_label === 'all') {
+                    const servers = await resolveAllServers();
+                    const fanoutResults = await Promise.all(
+                        servers.map(async (server) => {
+                            const output = await tool.execute({
+                                ...toolArgs,
+                                server_label: server.label,
+                                host: server.ip,
+                            });
+                            return {
+                                success: output.success,
+                                output: `[${server.label}]\n${output.output}`,
+                            };
+                        })
+                    );
+                    result = {
+                        success: fanoutResults.every((entry) => entry.success),
+                        output: fanoutResults.map((entry) => entry.output).join('\n\n'),
+                    };
+                } else {
+                    result = await tool.execute(toolArgs);
+                }
                 // FIX BUG 2: Register this tool as actually having run.
                 executedTools.add(toolName);
                 console.log(`[loop] ✅ TOOL COMPLETE: ${toolName} — success=${result.success}, output length: ${result.output.length} chars`);
@@ -651,6 +1006,7 @@ export async function runAgentLoop(
                     'get_current_time',
                     'search_fix_memory',
                     'diagnose_nginx',    // diagnosis only — not a fix
+                    // execute_ssh_write is intentionally NOT skipped; write fixes should be remembered.
                 ]);
                 if (result.success && !SKIP_MEMORY_TOOLS.has(toolName)) {
                     void saveFix(
@@ -685,7 +1041,7 @@ export async function runAgentLoop(
                         role: 'user',
                         content:
                             `diagnose_nginx found a config error in ${foundFilePath}. ` +
-                            `Call fix_nginx_config now with host="${String(toolArgs.host)}" ` +
+                            `Call fix_nginx_config now with server_label="${String(toolArgs.server_label ?? 'production')}" ` +
                             `and file_path="${foundFilePath}". Do not ask for confirmation.`,
                     });
                 }
@@ -699,7 +1055,22 @@ export async function runAgentLoop(
     if (iteration >= MAX_ITERATIONS) {
         console.warn('[loop] Max iterations reached');
         await indicator?.stop();
-        await onReply('⚠️ Reached maximum reasoning iterations. Please try a more specific query.');
+        const escalationText =
+            `⚠️ Complex issue — reached reasoning limit after ${iteration} steps.\n\n`
+            + `*What I found:*\n${buildProgressSummary(messages)}\n\n`
+            + 'Reply with more specific instructions or type `@CloudClaw continue` to keep going.';
+
+        if (message.channel === 'slack' && (message.replyTarget ?? session?.reply_target)) {
+            try {
+                const { sendSlackMessage } = await import('../interfaces/slack.js');
+                await sendSlackMessage(String(message.replyTarget ?? session?.reply_target), escalationText);
+            } catch (err) {
+                console.warn('[loop] Failed to send Slack escalation directly, falling back to onReply:', err);
+                await onReply(escalationText);
+            }
+        } else {
+            await onReply(escalationText);
+        }
     }
 
     // 5. Persist session
@@ -707,6 +1078,7 @@ export async function runAgentLoop(
         id: message.sessionId,
         channel: message.channel,
         user_id: message.userId,
+        reply_target: message.replyTarget ?? session?.reply_target ?? null,
         messages: messages as unknown as Array<Record<string, unknown>>,
         iteration,
     });

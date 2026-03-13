@@ -7,6 +7,7 @@ import {
 import { getToolByName } from '../tools/tool_registry.js';
 import { decodeToolApprovalCommand } from './tool_approval.js';
 import { runAgentLoop } from '../agents/loop.js';
+import { touchSession } from '../jobs/timeout_sessions.js';
 import { saveFix } from '../memory/fix_memory.js';
 import type { ReplyFn, ApprovalFn } from '../tools/types.js';
 
@@ -16,6 +17,7 @@ export async function resumeApprovedSession(
     pilotUserId: string,
     onReply: ReplyFn,
     onApproval: ApprovalFn,
+    rejectionReason?: string,
 ): Promise<void> {
     console.log(`[resume] Handling approval ${approvalId} — approved=${approved}`);
 
@@ -25,16 +27,21 @@ export async function resumeApprovedSession(
         await onReply('⚠️ Approval record not found — it may have expired.');
         return;
     }
+    if (approval.status === 'expired') {
+        await onReply('⏰ This approval expired (>10 min). Please re-run the command.');
+        return;
+    }
     if (approval.status !== 'pending') {
         await onReply(`⚠️ This approval is already ${approval.status}.`);
         return;
     }
 
-    // 2. Update status immediately
-    await updateApprovalStatus(approvalId, approved ? 'approved' : 'rejected', pilotUserId);
-
-    if (!approved) {
-        await onReply('❌ Action rejected. No changes were made to the server.');
+    // 2. Update status immediately.
+    // updateApprovalStatus now returns a boolean indicating if the row was actually updated.
+    // If it returns false, another process (e.g. double click) already handled it.
+    const didUpdate = await updateApprovalStatus(approvalId, approved ? 'approved' : 'rejected', pilotUserId);
+    if (!didUpdate) {
+        console.warn(`[resume] Approval ${approvalId} was already handled or cannot be updated. Aborting duplicate run.`);
         return;
     }
 
@@ -42,6 +49,61 @@ export async function resumeApprovedSession(
     const session = await getSession(approval.session_id);
     if (!session) {
         await onReply('⚠️ Session expired — please repeat your request.');
+        return;
+    }
+    touchSession(approval.session_id);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messages = (session.messages ?? []) as any[];
+
+    if (!approval.tool_call_id) {
+        throw new Error('Approval record is missing tool_call_id — cannot safely update the pending tool result');
+    }
+
+    if (!approved) {
+        const rejectionContent = rejectionReason
+            ? `Pilot rejected this command. Reason given: "${rejectionReason}". Re-evaluate your approach and suggest an alternative that addresses the Pilot's concern. Do NOT retry the same command.`
+            : 'Pilot rejected this command with no reason given. Re-evaluate your approach and ask the Pilot what they would prefer instead.';
+
+        const placeholderIndex = messages.findIndex(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (m: any) => m.role === 'tool' && m.tool_call_id === approval.tool_call_id
+        );
+
+        if (placeholderIndex !== -1) {
+            messages[placeholderIndex] = {
+                role: 'tool',
+                tool_call_id: approval.tool_call_id,
+                content: rejectionContent,
+            };
+        } else {
+            messages.push({
+                role: 'tool',
+                tool_call_id: approval.tool_call_id,
+                content: rejectionContent,
+            });
+        }
+
+        await upsertSession({
+            id: approval.session_id,
+            channel: session.channel,
+            user_id: session.user_id,
+            reply_target: session.reply_target ?? null,
+            messages: messages as unknown as Array<Record<string, unknown>>,
+            iteration: session.iteration ?? 0,
+        });
+
+        await runAgentLoop(
+            {
+                sessionId: approval.session_id,
+                userId: pilotUserId,
+                channel: session.channel as 'telegram' | 'slack',
+                text: '',
+                replyTarget: session.reply_target ?? undefined,
+            },
+            onReply,
+            onApproval,
+        );
         return;
     }
 
@@ -75,7 +137,7 @@ export async function resumeApprovedSession(
     }
 
     // 6. Execute the tool NOW
-    await onReply(`⚙️ Proceeding — executing ${toolName} on \`${String(toolArgs.host ?? 'server')}\`...`);
+    await onReply(`⚙️ Proceeding — executing ${toolName} on \`${String(toolArgs.server_label ?? toolArgs.host ?? 'server')}\`...`);
 
     let result;
     try {
@@ -103,10 +165,6 @@ export async function resumeApprovedSession(
         return;
     }
 
-    if (!approval.tool_call_id) {
-        throw new Error('Approval record is missing tool_call_id — cannot safely submit tool result to LLM');
-    }
-
     // ─── FIX: Replace placeholder, do NOT append ──────────────────────────────
     //
     // THE BUG (old code):
@@ -125,8 +183,6 @@ export async function resumeApprovedSession(
     //   maintaining a valid conversation chain.
     // ─────────────────────────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messages = (session.messages ?? []) as any[];
-
     const placeholderIndex = messages.findIndex(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (m: any) => m.role === 'tool' && m.tool_call_id === approval.tool_call_id
@@ -156,6 +212,7 @@ export async function resumeApprovedSession(
         id: approval.session_id,
         channel: session.channel,
         user_id: session.user_id,
+        reply_target: session.reply_target ?? null,
         messages: messages as unknown as Array<Record<string, unknown>>,
         iteration: (session.iteration ?? 0),
     });
@@ -183,6 +240,7 @@ export async function resumeApprovedSession(
             userId: pilotUserId,
             channel: session.channel as 'telegram' | 'slack',
             text: continuationText,
+            replyTarget: session.reply_target ?? undefined,
             resumedTools: [toolName],
         },
         onReply,

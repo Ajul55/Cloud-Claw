@@ -14,6 +14,10 @@ export interface Tool {
         properties: Record<string, unknown>;
         required: string[];
     };
+    /** Optional HITL tier metadata used by the loop for approval routing */
+    approvalTier?: number;
+    /** Optional human-readable approval rationale for HITL cards */
+    getRationale?: (args: Record<string, unknown>) => string;
     /** Execute the tool and return a result */
     execute(args: Record<string, unknown>): Promise<ToolResult>;
 }
@@ -33,6 +37,8 @@ export interface IncomingMessage {
     channel: 'telegram' | 'slack';
     userId: string;
     text: string;
+    /** Concrete reply target (Slack channel ID, Telegram chat ID) */
+    replyTarget?: string;
     /** Tools that were executed during HITL resume before re-entering the loop.
      *  These are seeded into executedTools so the hallucination detector
      *  knows they genuinely ran. */

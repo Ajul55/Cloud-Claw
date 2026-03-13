@@ -10,6 +10,7 @@
 import { Bot, type Context } from 'grammy';
 import { env } from '../config/env.js';
 import { runAgentLoop } from '../agents/loop.js';
+import { getSession } from '../database/db.js';
 import { buildApprovalMessage } from '../hitl/approval_message.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { handleSlashCommand } from '../commands/slash_handler.js';
@@ -33,6 +34,8 @@ export function createTelegramBot(): Bot {
     const processMessage = async (ctx: Context, text: string) => {
         const userId = String(ctx.from!.id);
         const sessionId = `telegram:${userId}`;
+        const lowerText = text.toLowerCase().trim();
+        const isContinueRequest = /^(?:@cloudclaw\s+)?(?:continue|keep going)\b/.test(lowerText);
 
         console.log(`[Telegram] Message from ${userId}: ${text.slice(0, 80)}`);
 
@@ -65,9 +68,21 @@ export function createTelegramBot(): Bot {
             if (isCommand) return;
 
             const indicator = new StatusIndicator('telegram', String(ctx.chat?.id || userId), ctx.api);
+            let loopText = text;
+
+            if (isContinueRequest) {
+                const existingSession = await getSession(sessionId);
+                if (!existingSession) {
+                    await onReply('⚠️ No active session to continue.');
+                    return;
+                }
+                loopText = text.length > 'continue'.length
+                    ? `continue previous investigation. Latest Pilot instruction: ${text}`
+                    : 'continue previous investigation from the saved session. Resume from the latest unresolved finding and next step.';
+            }
 
             await runAgentLoop(
-                { sessionId, channel: 'telegram', userId, text },
+                { sessionId, channel: 'telegram', userId, text: loopText, replyTarget: String(ctx.chat?.id ?? userId) },
                 onReply,
                 onApproval,
                 indicator
@@ -176,5 +191,3 @@ function splitMessage(text: string, maxLen: number): string[] {
     }
     return chunks;
 }
-
-

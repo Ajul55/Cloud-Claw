@@ -13,11 +13,14 @@ type SlackAppInstance = InstanceType<typeof App>;
 
 import { env } from '../config/env.js';
 import { runAgentLoop } from '../agents/loop.js';
+import { getSession } from '../database/db.js';
 import { buildApprovalMessage } from '../hitl/approval_message.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { handleSlashCommand } from '../commands/slash_handler.js';
 import { StatusIndicator } from '../utils/status_indicator.js';
 import type { ApprovalFn, ReplyFn } from '../tools/types.js';
+
+let slackAppRef: SlackAppInstance | null = null;
 
 export function createSlackApp(): SlackAppInstance {
     const app = new App({
@@ -27,6 +30,7 @@ export function createSlackApp(): SlackAppInstance {
         // Using @slack/bolt >= v4 to prevent crashes on 'too_many_websockets' errors
         logLevel: LogLevel.WARN,
     });
+    slackAppRef = app;
 
     // Aggressive global logger cache for debugging Slack event routing
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,6 +56,8 @@ export function createSlackApp(): SlackAppInstance {
         }
 
         const sessionId = `slack:${user}`;
+        const lowerText = cleanText.toLowerCase().trim();
+        const isContinueRequest = /^(?:@cloudclaw\s+)?(?:continue|keep going)\b/.test(lowerText);
         console.log(`[Slack] Message from ${user} in ${channel}: ${cleanText.slice(0, 80)}`);
 
         const onReply: ReplyFn = async (response) => {
@@ -82,9 +88,21 @@ export function createSlackApp(): SlackAppInstance {
             if (isCommand) return;
 
             const indicator = new StatusIndicator('slack', channel, client, user);
+            let loopText = cleanText;
+
+            if (isContinueRequest) {
+                const existingSession = await getSession(sessionId);
+                if (!existingSession) {
+                    await onReply('⚠️ No active session to continue.');
+                    return;
+                }
+                loopText = cleanText.length > 'continue'.length
+                    ? `continue previous investigation. Latest Pilot instruction: ${cleanText}`
+                    : 'continue previous investigation from the saved session. Resume from the latest unresolved finding and next step.';
+            }
 
             await runAgentLoop(
-                { sessionId, channel: 'slack', userId: user, text: cleanText },
+                { sessionId, channel: 'slack', userId: user, text: loopText, replyTarget: channel },
                 onReply,
                 onApproval,
                 indicator
@@ -179,6 +197,7 @@ export function createSlackApp(): SlackAppInstance {
         const approvalId = parseInt(action.value, 10);
         const channelId = (body as { channel?: { id: string } }).channel?.id;
         const userId = (body as { user?: { id: string } }).user?.id ?? 'unknown';
+        const reason = (body as any).state?.values?.rejection_reason_block?.rejection_reason_input?.value ?? undefined;
 
         if (!channelId) return;
 
@@ -196,7 +215,8 @@ export function createSlackApp(): SlackAppInstance {
             false,
             userId,
             async (text) => { void client.chat.postMessage({ channel: channelId, text }); },
-            async () => { }
+            async () => { },
+            reason,
         );
     });
 
@@ -206,6 +226,18 @@ export function createSlackApp(): SlackAppInstance {
 export async function startSlackApp(app: SlackAppInstance): Promise<void> {
     await app.start();
     console.log('[Slack] Socket Mode connected ✓');
+}
+
+export async function sendSlackMessage(channel: string, text: string): Promise<void> {
+    if (!slackAppRef) {
+        console.warn('[Slack] sendSlackMessage called before Slack app initialization');
+        return;
+    }
+
+    await slackAppRef.client.chat.postMessage({
+        channel,
+        text,
+    });
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────

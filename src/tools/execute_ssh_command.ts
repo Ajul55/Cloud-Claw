@@ -1,5 +1,5 @@
-import { env } from '../config/env.js';
 import { sshExec } from '../utils/ssh.js';
+import { formatServerTarget, resolveServerArg } from '../utils/server_registry.js';
 import type { Tool, ToolResult } from './types.js';
 
 function enrichServiceRestartCommand(command: string): string {
@@ -21,33 +21,41 @@ export const executeSshCommandTool: Tool = {
     parameters: {
         type: 'object',
         properties: {
+            server_label: {
+                type: 'string',
+                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
+                enum: ['production', 'test'],
+            },
             host: {
                 type: 'string',
-                description: 'IP address or hostname of the target server.',
+                description: 'Legacy host/IP override. Prefer server_label.',
             },
             command: {
                 type: 'string',
                 description: 'The shell command to execute. Must be a valid bash command.',
             },
         },
-        required: ['host', 'command'],
+        required: ['command'],
     },
 
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const host = String(args.host);
-        const command = String(args.command);
+        const command = String(args.command ?? '');
         const commandToRun = enrichServiceRestartCommand(command);
 
-        if (!host || !command) {
+        if (!command) {
             return {
                 success: false,
-                output: 'Error: host and command are required.',
+                output: 'Error: command is required.',
             };
         }
 
         try {
-            console.log(`[execute_ssh_command] Running '${commandToRun}' on ${host}`);
-            const output = await sshExec(host, commandToRun);
+            const server = await resolveServerArg(args);
+            console.log(`[execute_ssh_command] Running '${commandToRun}' on ${formatServerTarget(server)}`);
+            const output = await sshExec(server.ip, commandToRun, {
+                user: server.sshUser,
+                port: server.sshPort,
+            });
 
             return {
                 success: true,
@@ -58,7 +66,7 @@ export const executeSshCommandTool: Tool = {
             console.error(`[execute_ssh_command] Error:`, message);
             return {
                 success: false,
-                output: `❌ SSH Command failed on ${host}: ${message}`,
+                output: `❌ SSH command failed: ${message}`,
             };
         }
     },

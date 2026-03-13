@@ -1,4 +1,5 @@
 import { sshExec } from '../utils/ssh.js';
+import { formatServerTarget, resolveServerArg } from '../utils/server_registry.js';
 import type { Tool, ToolResult } from './types.js';
 
 function isSafeUnixPath(path: string): boolean {
@@ -17,23 +18,27 @@ export const fixNginxConfigTool: Tool = {
     parameters: {
         type: 'object',
         properties: {
+            server_label: {
+                type: 'string',
+                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
+                enum: ['production', 'test'],
+            },
             host: {
                 type: 'string',
-                description: 'IP address or hostname of the target server.',
+                description: 'Legacy host/IP override. Prefer server_label.',
             },
             file_path: {
                 type: 'string',
                 description: 'Absolute nginx config path to repair (example: /etc/nginx/sites-enabled/example.com).',
             },
         },
-        required: ['host', 'file_path'],
+        required: ['file_path'],
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const host = String(args.host ?? '').trim();
         const filePath = String(args.file_path ?? '').trim();
 
-        if (!host || !filePath) {
-            return { success: false, output: 'Error: host and file_path are required.' };
+        if (!filePath) {
+            return { success: false, output: 'Error: file_path is required.' };
         }
         if (!isSafeUnixPath(filePath)) {
             return { success: false, output: `Error: Invalid file_path: ${filePath}` };
@@ -42,23 +47,25 @@ export const fixNginxConfigTool: Tool = {
         const backupPath = `${filePath}.cloudclaw.bak.${Date.now()}`;
 
         try {
-            const before = await sshExec(host, `sudo nl -ba "${filePath}" | sed -n '1,12p'`);
-            await sshExec(host, `sudo cp "${filePath}" "${backupPath}"`);
+            const server = await resolveServerArg(args);
+            const sshOptions = { user: server.sshUser, port: server.sshPort };
+            const before = await sshExec(server.ip, `sudo nl -ba "${filePath}" | sed -n '1,12p'`, sshOptions);
+            await sshExec(server.ip, `sudo cp "${filePath}" "${backupPath}"`, sshOptions);
 
             let literalNewlineFixApplied = false;
             let verifyPreview = '';
 
             // Some broken writes store literal "\n" characters instead of real newlines.
             // If detected, rewrite the file content using base64 transfer + decode.
-            const currentContent = await sshExec(host, `sudo cat "${filePath}"`);
+            const currentContent = await sshExec(server.ip, `sudo cat "${filePath}"`, sshOptions);
             if (currentContent.includes('\\n')) {
                 const normalizedContent = currentContent
                     .replace(/\\r\\n/g, '\n')
                     .replace(/\\n/g, '\n');
                 const encoded = Buffer.from(normalizedContent, 'utf8').toString('base64');
-                await sshExec(host, `echo '${encoded}' | base64 -d | sudo tee "${filePath}" > /dev/null`);
+                await sshExec(server.ip, `echo '${encoded}' | base64 -d | sudo tee "${filePath}" > /dev/null`, sshOptions);
 
-                verifyPreview = await sshExec(host, `sudo cat -A "${filePath}" | head -3`);
+                verifyPreview = await sshExec(server.ip, `sudo cat -A "${filePath}" | head -3`, sshOptions);
                 console.log('[fix_nginx_config] Written file preview:', verifyPreview);
 
                 if (verifyPreview.includes('\\n')) {
@@ -68,16 +75,16 @@ export const fixNginxConfigTool: Tool = {
             }
 
             // Safe normalizations for this specific failure class.
-            await sshExec(host, `sudo sed -i '1s/^\\xEF\\xBB\\xBF//' "${filePath}"`);
-            await sshExec(host, `sudo sed -i 's/\\r$//' "${filePath}"`);
-            await sshExec(host, `sudo sed -i '1{/^[[:space:]]*\\"[[:space:]]*$/d;}' "${filePath}"`);
-            await sshExec(host, `sudo sed -i '1s/^[[:space:]]*\\"[[:space:]]*server[[:space:]]*{/server {/' "${filePath}"`);
+            await sshExec(server.ip, `sudo sed -i '1s/^\\xEF\\xBB\\xBF//' "${filePath}"`, sshOptions);
+            await sshExec(server.ip, `sudo sed -i 's/\\r$//' "${filePath}"`, sshOptions);
+            await sshExec(server.ip, `sudo sed -i '1{/^[[:space:]]*\\"[[:space:]]*$/d;}' "${filePath}"`, sshOptions);
+            await sshExec(server.ip, `sudo sed -i '1s/^[[:space:]]*\\"[[:space:]]*server[[:space:]]*{/server {/' "${filePath}"`, sshOptions);
 
-            const after = await sshExec(host, `sudo nl -ba "${filePath}" | sed -n '1,12p'`);
-            const testOutput = await sshExec(host, 'sudo nginx -t 2>&1 || nginx -t 2>&1');
+            const after = await sshExec(server.ip, `sudo nl -ba "${filePath}" | sed -n '1,12p'`, sshOptions);
+            const testOutput = await sshExec(server.ip, 'sudo nginx -t 2>&1 || nginx -t 2>&1', sshOptions);
 
             if (!nginxTestPassed(testOutput)) {
-                await sshExec(host, `sudo cp "${backupPath}" "${filePath}"`);
+                await sshExec(server.ip, `sudo cp "${backupPath}" "${filePath}"`, sshOptions);
                 return {
                     success: false,
                     output: [
@@ -94,14 +101,15 @@ export const fixNginxConfigTool: Tool = {
             }
 
             const restartOutput = await sshExec(
-                host,
-                'sudo systemctl restart nginx && sudo systemctl is-active nginx && sudo systemctl status nginx --no-pager -l | sed -n "1,30p"'
+                server.ip,
+                'sudo systemctl restart nginx && sudo systemctl is-active nginx && sudo systemctl status nginx --no-pager -l | sed -n "1,30p"',
+                sshOptions
             );
 
             return {
                 success: true,
                 output: [
-                    `Nginx config remediation applied on ${host}.`,
+                    `Nginx config remediation applied on ${formatServerTarget(server)}.`,
                     `File: ${filePath}`,
                     `Backup: ${backupPath}`,
                     '',
@@ -133,7 +141,7 @@ export const fixNginxConfigTool: Tool = {
             };
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            return { success: false, output: `Nginx fix failed on ${host}: ${msg}` };
+            return { success: false, output: `Nginx fix failed: ${msg}` };
         }
     },
 };

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id          TEXT        PRIMARY KEY,  -- e.g. "telegram:123456789"
   channel     TEXT        NOT NULL,     -- "telegram" | "slack"
   user_id     TEXT        NOT NULL,
+  reply_target TEXT,
   messages    JSONB       NOT NULL DEFAULT '[]'::JSONB,
   iteration   INTEGER     NOT NULL DEFAULT 0,
   status      TEXT        NOT NULL DEFAULT 'open', -- open | in_progress | resolved | escalated
@@ -35,6 +36,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS reply_target TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE sessions ALTER COLUMN status SET DEFAULT 'active';
+UPDATE sessions
+SET status = 'active'
+WHERE status IN ('open', 'in_progress')
+   OR status IS NULL;
 
 -- ─── HITL Approval Queue ──────────────────────────────────────────────────────
 -- Stores pending Tier-3 actions waiting for human approval.
@@ -45,7 +54,7 @@ CREATE TABLE IF NOT EXISTS approval_queue (
   target_host TEXT        NOT NULL,
   rationale   TEXT,
   tool_call_id TEXT,       -- LLM tool_call_id for clean resume
-  status      TEXT        NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  status      TEXT        NOT NULL DEFAULT 'pending', -- pending | approved | rejected | expired
   requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at  TIMESTAMPTZ
 );
@@ -53,15 +62,21 @@ CREATE TABLE IF NOT EXISTS approval_queue (
 CREATE INDEX IF NOT EXISTS approval_queue_status_idx ON approval_queue (status);
 CREATE INDEX IF NOT EXISTS approval_queue_session_idx ON approval_queue (session_id);
 
--- ─── Active Server Nodes ────────────────────────────────────────────────────────
--- Stores known hosts for Sentinel sweeps and status checks
-CREATE TABLE IF NOT EXISTS server_nodes (
-  id                SERIAL      PRIMARY KEY,
-  hostname          TEXT        NOT NULL,
-  ip_address        TEXT,
-  is_active         BOOLEAN     DEFAULT TRUE,
-  last_health_check TIMESTAMPTZ
+-- ─── Registered Servers ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS servers (
+  id SERIAL PRIMARY KEY,
+  label TEXT NOT NULL UNIQUE,
+  ip TEXT NOT NULL,
+  ssh_user TEXT NOT NULL DEFAULT 'root',
+  ssh_port INTEGER NOT NULL DEFAULT 22,
+  active BOOLEAN NOT NULL DEFAULT true,
+  added_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+INSERT INTO servers (label, ip, ssh_user, ssh_port) VALUES
+  ('production', '139.84.130.63', 'root', 22),
+  ('test',       '65.20.82.177',  'root', 22)
+ON CONFLICT (label) DO NOTHING;
 
 -- ─── LLM Usage Telemetry ──────────────────────────────────────────────────────
 -- Tracks token usage and cost

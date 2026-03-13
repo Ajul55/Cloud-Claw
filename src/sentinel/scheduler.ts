@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { env } from '../config/env.js';
-import { getPool, isDBConfigured } from '../database/db.js';
+import { getAllServers } from '../utils/server_registry.js';
 
 export type NotifyFn = (text: string) => Promise<void>;
 
@@ -19,15 +19,9 @@ export function startSentinel(notify: NotifyFn): void {
     // Morning Briefing at 08:00 AM daily
     cron.schedule('0 8 * * *', async () => {
         try {
-            let activeNodes = 0;
-            let totalNodes = 0;
-
-            if (isDBConfigured()) {
-                const pool = getPool();
-                const res = await pool.query('SELECT is_active FROM server_nodes');
-                totalNodes = res.rows.length;
-                activeNodes = res.rows.filter(r => r.is_active).length;
-            }
+            const servers = await getAllServers();
+            const totalNodes = servers.length;
+            const activeNodes = servers.filter((server) => server.active).length;
 
             const msg = `🌅 *Good morning, Pilot.*\n\n` +
                 `Sentinel Heartbeat active.\n` +
