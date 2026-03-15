@@ -267,20 +267,11 @@ WHEN IN AUDIT MODE:
   ✓ End the report with a "Recommendations" section — list what
     should be fixed but DO NOT fix it. The Pilot decides.
 
-FULL AUDIT SEQUENCE — run ALL 13 steps, no skipping:
-  1.  systemctl status nginx mariadb mysql php*-fpm 2>&1 | head -40
-  2.  df -h
-  3.  free -m
-  4.  uptime
-  5.  find /tmp -size +50M -ls 2>/dev/null
-  6.  find /var/log -size +100M -ls 2>/dev/null
-  7.  find /home -size +500M -ls 2>/dev/null
-  8.  du -sh /tmp/* 2>/dev/null | sort -rh | head -10
-  9.  ls /etc/cron.d/ && cat /etc/cron.d/* 2>/dev/null
-  10. crontab -l 2>/dev/null
-  11. ss -tlnp | grep -v '127.0.0.1'
-  12. last | head -10
-  13. nginx -t 2>&1
+FULL AUDIT SEQUENCE — batch into FOUR execute_ssh_command calls (no skipping):
+  Call 1: systemctl status nginx mariadb mysql php*-fpm 2>&1 | head -40 ; df -h ; free -m ; uptime
+  Call 2: find /tmp -size +50M -ls 2>/dev/null ; find /var/log -size +100M -ls 2>/dev/null ; find /home -size +500M -ls 2>/dev/null ; du -sh /tmp/* 2>/dev/null | sort -rh | head -10
+  Call 3: crontab -l 2>/dev/null ; ls /etc/cron.d/ ; cat /etc/cron.d/* 2>/dev/null
+  Call 4: ss -tlnp | grep -v '127.0.0.1' ; last | head -10 ; nginx -t 2>&1
 
 EXIT AUDIT MODE ONLY when Pilot says one of:
   "fix it", "apply the fix", "resolve it", "clean it up", "proceed"

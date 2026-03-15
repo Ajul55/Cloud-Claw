@@ -4,6 +4,7 @@ import { z } from 'zod';
 const EnvSchema = z.object({
     // LLM
     LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required'),
+
     LLM_BASE_URL: z.string().url().optional(),
     LLM_MODEL: z.string().default('gpt-4o'),
     LLM_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).default('openai'),
@@ -29,6 +30,10 @@ const EnvSchema = z.object({
     SLACK_APP_TOKEN: z.string().min(1, 'SLACK_APP_TOKEN is required'),
     SLACK_USER_ID: z.string().min(1, 'SLACK_USER_ID is required'),
     SLACK_CHANNEL_ID: z.string().optional(),
+
+    // Voyage AI — semantic embeddings for fix memory
+    VOYAGE_API_KEY: z.string().optional(),
+    VOYAGE_MODEL: z.string().default('voyage-code-2'),
 
     // Database (optional for initial testing — runs in memory-only mode)
     DATABASE_URL: z.string().optional(),

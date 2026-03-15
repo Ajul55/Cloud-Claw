@@ -3,6 +3,11 @@ import type { Tool, ToolResult } from './types.js';
 
 export const create_nginx_vhost: Tool = {
   name: 'create_nginx_vhost',
+  approvalTier: 3,
+  getRationale: (args) => {
+    const domain = String(args.domain ?? 'domain');
+    return `Create and enable new nginx vhost for ${domain}, write config to /etc/nginx/sites-enabled and reload nginx.`;
+  },
   description:
     'Create a new Nginx virtual host config on the server. ' +
     'Use this when the user wants to: add a new site, set up a reverse proxy, ' +

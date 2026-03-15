@@ -42,8 +42,11 @@ async function main(): Promise<void> {
     }
 
     // 3. Slack (primary)
-    const slackApp = createSlackApp();
-    await startSlackApp(slackApp);
+    const slackAppCandidate = createSlackApp();
+    const slackApp = await startSlackApp(slackAppCandidate);
+    if (!slackApp) {
+        console.warn('[Slack] Disabled — startup failed. Running without Slack.');
+    }
 
     console.log('');
     console.log('✅ Cloud-Claw is operational. Waiting for messages...');
@@ -84,7 +87,7 @@ async function main(): Promise<void> {
     const shutdown = async (signal: string) => {
         console.log(`\n[Main] Caught ${signal} — shutting down...`);
         if (telegramBot) telegramBot.stop();
-        await slackApp.stop();
+        if (slackApp) await slackApp.stop();
         if (env.DATABASE_URL) {
             const { closeDB } = await import('./database/db.js');
             await closeDB();

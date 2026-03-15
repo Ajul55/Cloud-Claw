@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
     getApprovalById,
     updateApprovalStatus,
@@ -55,6 +56,9 @@ export async function resumeApprovedSession(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const messages = (session.messages ?? []) as any[];
+    const receipts: Record<string, any> = typeof session.receipts === 'object' && session.receipts
+        ? { ...(session.receipts as Record<string, any>) }
+        : {};
 
     if (!approval.tool_call_id) {
         throw new Error('Approval record is missing tool_call_id — cannot safely update the pending tool result');
@@ -64,6 +68,13 @@ export async function resumeApprovedSession(
         const rejectionContent = rejectionReason
             ? `Pilot rejected this command. Reason given: "${rejectionReason}". Re-evaluate your approach and suggest an alternative that addresses the Pilot's concern. Do NOT retry the same command.`
             : 'Pilot rejected this command with no reason given. Re-evaluate your approach and ask the Pilot what they would prefer instead.';
+
+        // Store rejection in fix_memory to prevent future identical suggestions
+        void saveFix(
+            `Pilot rejected proposed action: ${approval.command.slice(0, 300)}`,
+            rejectionReason ? `Rejected because: ${rejectionReason}` : 'Rejected with no reason given. Do NOT retry.',
+            'rejected_action'
+        ).catch(err => console.warn('[resume] saveFix (rejection) failed:', err));
 
         const placeholderIndex = messages.findIndex(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,6 +101,7 @@ export async function resumeApprovedSession(
             user_id: session.user_id,
             reply_target: session.reply_target ?? null,
             messages: messages as unknown as Array<Record<string, unknown>>,
+            receipts,
             iteration: session.iteration ?? 0,
         });
 
@@ -143,6 +155,13 @@ export async function resumeApprovedSession(
     try {
         result = await tool.execute(toolArgs);
         console.log(`[resume] ✅ Tool complete: ${toolName} — success=${result.success}`);
+        receipts[toolName] = {
+            toolName,
+            success: Boolean(result.success),
+            host: String((toolArgs as any).host ?? (toolArgs as any).server_label ?? 'unknown'),
+            timestamp: Date.now(),
+            outputHash: createHash('sha256').update((result.output ?? '').slice(0, 200)).digest('hex'),
+        };
 
         // Save successful fix to memory (non-fatal)
         if (result.success) {
@@ -214,6 +233,7 @@ export async function resumeApprovedSession(
         user_id: session.user_id,
         reply_target: session.reply_target ?? null,
         messages: messages as unknown as Array<Record<string, unknown>>,
+        receipts,
         iteration: (session.iteration ?? 0),
     });
 
@@ -227,12 +247,32 @@ export async function resumeApprovedSession(
 
     // Build continuation text: remind the LLM about the original request
     const isBroadQuery = /\b(everything|nothing|completely|all\s+down|not\s+working|broken|check\s+everything)\b/i.test(originalQuery);
-    let continuationText = '';
-    if (isBroadQuery) {
-        continuationText = `The ${toolName} fix has been applied. But my original request was broad: "${originalQuery.slice(0, 100)}". ` +
-            `Check other major services too (MariaDB/MySQL, PHP-FPM) before giving the final summary. ` +
-            `Use execute_ssh_command for non-nginx service checks.`;
+
+    const targetLabel = String((toolArgs as any).server_label ?? '').trim();
+    const targetHost = String((toolArgs as any).host ?? '').trim();
+    const serverContext = (targetLabel || targetHost)
+        ? `Continue on server ${targetLabel || targetHost}${targetHost ? ` (${targetHost})` : ''}. Do NOT switch servers unless the Pilot explicitly asks.`
+        : '';
+
+    const broadContinuation = isBroadQuery
+        ? `The ${toolName} action has been applied. Original request was broad: "${originalQuery.slice(0, 100)}". ` +
+        `Check other major services (MariaDB/MySQL, PHP-FPM) before giving the final summary. ` +
+        `Use execute_ssh_command for non-nginx checks.`
+        : '';
+
+    const continuationText = [serverContext, broadContinuation].filter(Boolean).join(' ');
+
+    const resumedTools = new Set<string>();
+    for (const msg of messages) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tc = (msg as any).tool_calls;
+        if (msg.role === 'assistant' && Array.isArray(tc)) {
+            tc.forEach((call: any) => {
+                if (call?.function?.name) resumedTools.add(call.function.name);
+            });
+        }
     }
+    resumedTools.add(toolName);
 
     await runAgentLoop(
         {
@@ -241,7 +281,7 @@ export async function resumeApprovedSession(
             channel: session.channel as 'telegram' | 'slack',
             text: continuationText,
             replyTarget: session.reply_target ?? undefined,
-            resumedTools: [toolName],
+            resumedTools: Array.from(resumedTools),
         },
         onReply,
         onApproval,

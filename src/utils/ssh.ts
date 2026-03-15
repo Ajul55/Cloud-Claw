@@ -27,6 +27,8 @@ const NON_RETRYABLE_ERRORS = [
     'Cannot parse privateKey', 'Encrypted private key detected'
 ];
 
+const MAX_OUTPUT_BYTES = 50_000;
+
 export function sanitizeDomain(domain: string): string {
     if (!/^[a-zA-Z0-9.-]+$/.test(domain)) {
         throw new Error(`Invalid domain format — only alphanumeric, dots, and hyphens allowed: ${domain}`);
@@ -74,6 +76,9 @@ async function executeSSHCommand(
                         .on('close', () => {
                             clearTimeout(timer);
                             conn.end();
+                            if (output.length > MAX_OUTPUT_BYTES) {
+                                output = output.slice(0, MAX_OUTPUT_BYTES) + '\n...[truncated at 50KB]';
+                            }
                             resolve(output.trim());
                         })
                         .on('data', (data: Buffer) => {

@@ -71,9 +71,7 @@ export async function resolveAllServers(): Promise<ServerNode[]> {
     return getAllServers();
 }
 
-export function isAllServersRequest(text: string): boolean {
-    return /\b(all servers|both servers|every server)\b/i.test(text);
-}
+
 
 export function formatServerTarget(server: Pick<ServerNode, 'label' | 'ip'>): string {
     return `${server.label} (${server.ip})`;

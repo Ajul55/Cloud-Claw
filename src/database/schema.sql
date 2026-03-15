@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id     TEXT        NOT NULL,
   reply_target TEXT,
   messages    JSONB       NOT NULL DEFAULT '[]'::JSONB,
+  receipts    JSONB       NOT NULL DEFAULT '{}'::JSONB,
   iteration   INTEGER     NOT NULL DEFAULT 0,
   status      TEXT        NOT NULL DEFAULT 'open', -- open | in_progress | resolved | escalated
   problem_class TEXT,
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS reply_target TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS receipts JSONB NOT NULL DEFAULT '{}'::JSONB;
 ALTER TABLE sessions ALTER COLUMN status SET DEFAULT 'active';
 UPDATE sessions
 SET status = 'active'
@@ -92,18 +94,25 @@ CREATE TABLE IF NOT EXISTS usage_log (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ─── Fix Memory (Keyword-based Level 2) ─────────────────────────────────────
+-- ─── Fix Memory (Semantic Vector Level 2) ───────────────────────────────────
 -- Stores past problems and solutions to bootstrap LLM debugging.
--- Uses keyword-based full-text search instead of vector embeddings.
+-- Uses Voyage AI embeddings + pgvector for semantic similarity search.
 CREATE TABLE IF NOT EXISTS fix_memory (
   id            SERIAL      PRIMARY KEY,
   issue_text    TEXT        NOT NULL,
   fix_command   TEXT        NOT NULL,
-  problem_class TEXT,
-  keywords      TEXT,        -- space-separated keyword tokens for search
+  problem_class TEXT        NOT NULL,
+  embedding     vector(1536),
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_fix_memory_keywords ON fix_memory USING gin(to_tsvector('english', COALESCE(keywords, '')));
-CREATE INDEX IF NOT EXISTS idx_fix_memory_problem_class ON fix_memory(problem_class);
-CREATE INDEX IF NOT EXISTS idx_fix_memory_created_at ON fix_memory(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fix_memory_embedding
+  ON fix_memory USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100);
+
+CREATE INDEX IF NOT EXISTS idx_fix_memory_problem_class
+  ON fix_memory(problem_class);
+
+CREATE INDEX IF NOT EXISTS idx_fix_memory_created_at
+  ON fix_memory(created_at DESC);
+

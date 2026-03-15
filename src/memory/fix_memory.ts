@@ -1,15 +1,24 @@
 /**
- * Fix Memory — Keyword-based recall system
+ * Fix Memory — Semantic vector search system
  *
  * Stores past problems and solutions so the LLM can reference them
- * for future similar issues. Uses keyword-based search (no OpenAI embeddings).
+ * for future similar issues. Uses Voyage AI embeddings + pgvector
+ * for semantic similarity search (1536 dimensions).
  *
  * Works in two modes:
  *   1. In-memory Map (always active)
- *   2. PostgreSQL (when DATABASE_URL is configured) — mirrors the in-memory store
+ *   2. PostgreSQL + pgvector (when DATABASE_URL is configured)
+ *
+ * Graceful degradation: if Voyage API is unavailable, falls back
+ * to exact-match or most-recent results.
  */
 
 import { getPool, isDBConfigured } from '../database/db.js';
+import {
+    generateEmbedding,
+    cosineSimilarity,
+    vectorToSQL,
+} from '../utils/embeddings.js';
 import type { Tool, ToolResult } from '../tools/types.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -19,7 +28,7 @@ export interface FixRecord {
     issueText: string;
     fixCommand: string;
     problemClass: string;
-    keywords: string;       // space-separated keyword tokens
+    embedding: number[] | null;
     createdAt: Date;
 }
 
@@ -28,106 +37,50 @@ export interface FixRecord {
 const memoryFixes = new Map<number, FixRecord>();
 let memoryIdCounter = 1;
 
-// ─── Stop words ───────────────────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-    'the', 'a', 'an', 'is', 'was', 'it', 'to', 'of', 'and', 'or',
-    'in', 'on', 'at', 'for', 'with', 'this', 'that', 'are', 'be',
-    'has', 'have', 'had', 'do', 'did', 'not', 'but',
-]);
-
 // ─── Core functions ───────────────────────────────────────────────────────────
 
 /**
- * Extract searchable keywords from text.
- * Lowercases, removes punctuation, filters stop words and short words.
- */
-export function extractKeywords(text: string): string {
-    const words = text
-        .toLowerCase()
-        .replace(/[^a-z0-9\s_-]/g, ' ')
-        .split(/\s+/)
-        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
-
-    // Deduplicate and limit to 50 keywords
-    const unique = [...new Set(words)].slice(0, 50);
-    return unique.join(' ');
-}
-
-/**
- * Score a candidate fix against a query using keyword overlap.
- * Returns 0.0 to 1.0 (fraction of query keywords found in candidate).
- */
-export function keywordScore(query: string, candidate: FixRecord): number {
-    const queryKw = extractKeywords(query).split(' ').filter(Boolean);
-    if (queryKw.length === 0) return 0;
-
-    const candidateKwSet = new Set(candidate.keywords.split(' '));
-    let matches = 0;
-    for (const kw of queryKw) {
-        if (candidateKwSet.has(kw)) matches++;
-    }
-    return matches / queryKw.length;
-}
-
-/**
- * Calculate character-level similarity between two strings (0.0 to 1.0).
- */
-function charSimilarity(a: string, b: string): number {
-    if (a === b) return 1.0;
-    const longer = a.length >= b.length ? a : b;
-    const shorter = a.length < b.length ? a : b;
-    if (longer.length === 0) return 1.0;
-
-    // Simple: count how many characters of shorter appear in longer
-    let matches = 0;
-    const used = new Set<number>();
-    for (const ch of shorter) {
-        for (let i = 0; i < longer.length; i++) {
-            if (!used.has(i) && longer[i] === ch) {
-                matches++;
-                used.add(i);
-                break;
-            }
-        }
-    }
-    return matches / longer.length;
-}
-
-/**
  * Check if this fix is a duplicate of an existing record.
- * Returns true if keyword overlap > 0.8 AND command is > 70% char-similar.
+ * Uses cosine similarity > 0.95 via pgvector or in-memory vectors.
+ * Falls back to exact fixCommand match if no embeddings available.
  */
 export async function isDuplicate(
     issueText: string,
     fixCommand: string,
 ): Promise<boolean> {
-    if (memoryFixes.size === 0) return false;
+    if (memoryFixes.size === 0 && !isDBConfigured()) return false;
 
-    const queryKw = extractKeywords(issueText + ' ' + fixCommand);
-    const tempRecord: FixRecord = {
-        id: -1,
-        issueText,
-        fixCommand,
-        problemClass: '',
-        keywords: queryKw,
-        createdAt: new Date(),
-    };
+    const combinedText = `${issueText} ${fixCommand}`.trim();
+    const queryEmbedding = await generateEmbedding(combinedText);
 
-    for (const existing of memoryFixes.values()) {
-        const kwOverlap = keywordScore(
-            issueText + ' ' + fixCommand,
-            existing,
-        );
-        if (kwOverlap > 0.8) {
-            const cmdSim = charSimilarity(
-                fixCommand.toLowerCase(),
-                existing.fixCommand.toLowerCase(),
+    // DB path — pgvector cosine similarity
+    if (isDBConfigured() && queryEmbedding) {
+        try {
+            const result = await getPool().query(
+                `SELECT 1 FROM fix_memory
+                 WHERE embedding IS NOT NULL
+                 AND 1 - (embedding <=> $1::vector) > 0.95
+                 LIMIT 1`,
+                [vectorToSQL(queryEmbedding)],
             );
-            if (cmdSim > 0.7) {
-                return true;
-            }
+            if ((result.rowCount ?? 0) > 0) return true;
+        } catch (err) {
+            console.warn('[fix_memory] isDuplicate DB check failed, using memory:', err);
         }
+    }
+
+    // In-memory path — cosine similarity
+    if (queryEmbedding) {
+        for (const fix of memoryFixes.values()) {
+            if (!fix.embedding) continue;
+            if (cosineSimilarity(queryEmbedding, fix.embedding) > 0.95) return true;
+        }
+        return false;
+    }
+
+    // No embedding available — exact fixCommand match fallback
+    for (const fix of memoryFixes.values()) {
+        if (fix.fixCommand.trim() === fixCommand.trim()) return true;
     }
     return false;
 }
@@ -142,134 +95,164 @@ export async function saveFix(
     problemClass: string,
 ): Promise<void> {
     try {
-        // Deduplication check
         if (await isDuplicate(issueText, fixCommand)) {
-            console.log(`[fix_memory] Duplicate detected, skipping save — class: ${problemClass}`);
+            console.log('[fix_memory] Duplicate skipped');
             return;
         }
 
-        const keywords = extractKeywords(issueText + ' ' + fixCommand);
+        const combinedText = `${issueText} ${fixCommand}`.trim();
+        const embedding = await generateEmbedding(combinedText);
+
         const id = memoryIdCounter++;
         const record: FixRecord = {
             id,
-            issueText,
-            fixCommand,
+            issueText: issueText.slice(0, 500),
+            fixCommand: fixCommand.slice(0, 500),
             problemClass,
-            keywords,
+            embedding,
             createdAt: new Date(),
         };
-
-        // Always save to in-memory store
         memoryFixes.set(id, record);
-        console.log(`[fix_memory] Saved fix #${id} — class: ${problemClass}`);
 
-        // Mirror to DB if configured
+        // Mirror to PostgreSQL
         if (isDBConfigured()) {
             try {
-                const pool = getPool();
-                const result = await pool.query(
-                    `INSERT INTO fix_memory (issue_text, fix_command, problem_class, keywords)
-                     VALUES ($1, $2, $3, $4) RETURNING id`,
-                    [issueText, fixCommand, problemClass, keywords],
-                );
-                // Update in-memory record with DB-assigned id
-                const dbId = result.rows[0]?.id;
-                if (dbId) {
-                    memoryFixes.delete(id);
-                    record.id = dbId;
-                    memoryFixes.set(dbId, record);
+                if (embedding) {
+                    await getPool().query(
+                        `INSERT INTO fix_memory
+                         (issue_text, fix_command, problem_class, embedding, created_at)
+                         VALUES ($1, $2, $3, $4::vector, NOW())`,
+                        [
+                            record.issueText,
+                            record.fixCommand,
+                            record.problemClass,
+                            vectorToSQL(embedding),
+                        ],
+                    );
+                } else {
+                    await getPool().query(
+                        `INSERT INTO fix_memory
+                         (issue_text, fix_command, problem_class, created_at)
+                         VALUES ($1, $2, $3, NOW())`,
+                        [
+                            record.issueText,
+                            record.fixCommand,
+                            record.problemClass,
+                        ],
+                    );
                 }
-            } catch (dbErr) {
-                console.warn('[fix_memory] DB insert failed (in-memory copy kept):', dbErr);
+            } catch (err) {
+                console.warn('[fix_memory] DB insert failed (non-fatal):', err);
             }
         }
+
+        console.log(`[fix_memory] Saved fix #${id} — class: ${problemClass}`);
     } catch (err) {
-        console.error('[fix_memory] saveFix error (non-fatal):', err);
+        console.warn('[fix_memory] saveFix failed (non-fatal):', err);
     }
+}
+
+/**
+ * Search for fixes similar to the query using semantic vector search.
+ * Returns top 3 with cosine similarity > 0.5.
+ * Falls back to most-recent if no embeddings available.
+ */
+export async function searchFixes(query: string): Promise<FixRecord[]> {
+    const queryEmbedding = await generateEmbedding(query);
+
+    // DB path — pgvector nearest neighbor
+    if (isDBConfigured() && queryEmbedding) {
+        try {
+            const result = await getPool().query(
+                `SELECT id,
+                        issue_text    AS "issueText",
+                        fix_command   AS "fixCommand",
+                        problem_class AS "problemClass",
+                        created_at    AS "createdAt",
+                        1 - (embedding <=> $1::vector) AS similarity
+                 FROM fix_memory
+                 WHERE embedding IS NOT NULL
+                   AND 1 - (embedding <=> $1::vector) > 0.5
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT 3`,
+                [vectorToSQL(queryEmbedding)],
+            );
+            return result.rows.map((row: Record<string, unknown>) => ({
+                id: row.id as number,
+                issueText: row.issueText as string,
+                fixCommand: row.fixCommand as string,
+                problemClass: row.problemClass as string,
+                embedding: null,
+                createdAt: new Date(row.createdAt as string),
+            }));
+        } catch (err) {
+            console.warn('[fix_memory] searchFixes DB failed, using memory:', err);
+        }
+    }
+
+    // In-memory path — cosine similarity
+    if (queryEmbedding && memoryFixes.size > 0) {
+        const scored = [...memoryFixes.values()]
+            .filter(f => f.embedding !== null)
+            .map(f => ({
+                fix: f,
+                score: cosineSimilarity(queryEmbedding, f.embedding!),
+            }))
+            .filter(({ score }) => score > 0.5)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 3);
+        return scored.map(({ fix }) => fix);
+    }
+
+    // No embedding available — return 3 most recent as best effort
+    return [...memoryFixes.values()]
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 3);
 }
 
 /**
  * Get the N most recent fixes, sorted by creation date descending.
  */
 export async function getRecentFixes(n: number): Promise<FixRecord[]> {
-    // Try DB first if configured
     if (isDBConfigured()) {
         try {
-            const pool = getPool();
-            const { rows } = await pool.query(
-                `SELECT id, issue_text, fix_command, problem_class, keywords, created_at
-                 FROM fix_memory ORDER BY created_at DESC LIMIT $1`,
+            const result = await getPool().query(
+                `SELECT id,
+                        issue_text    AS "issueText",
+                        fix_command   AS "fixCommand",
+                        problem_class AS "problemClass",
+                        created_at    AS "createdAt"
+                 FROM fix_memory
+                 ORDER BY created_at DESC
+                 LIMIT $1`,
                 [n],
             );
-            return rows.map(r => ({
-                id: r.id,
-                issueText: r.issue_text,
-                fixCommand: r.fix_command,
-                problemClass: r.problem_class ?? '',
-                keywords: r.keywords ?? '',
-                createdAt: new Date(r.created_at),
+            return result.rows.map((row: Record<string, unknown>) => ({
+                id: row.id as number,
+                issueText: row.issueText as string,
+                fixCommand: row.fixCommand as string,
+                problemClass: row.problemClass as string,
+                embedding: null,
+                createdAt: new Date(row.createdAt as string),
             }));
         } catch (err) {
-            console.warn('[fix_memory] DB getRecentFixes failed, using in-memory:', err);
+            console.warn('[fix_memory] getRecentFixes DB failed:', err);
         }
     }
-
-    // In-memory fallback
     return [...memoryFixes.values()]
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .slice(0, n);
 }
 
 /**
- * Search for fixes similar to the query. Returns top 3 with score > 0.3.
- */
-export async function searchFixes(query: string): Promise<FixRecord[]> {
-    // Try DB full-text search if configured
-    if (isDBConfigured()) {
-        try {
-            const pool = getPool();
-            const { rows } = await pool.query(
-                `SELECT id, issue_text, fix_command, problem_class, keywords, created_at
-                 FROM fix_memory
-                 WHERE to_tsvector('english', keywords) @@ plainto_tsquery('english', $1)
-                 ORDER BY created_at DESC LIMIT 3`,
-                [query],
-            );
-            if (rows.length > 0) {
-                return rows.map(r => ({
-                    id: r.id,
-                    issueText: r.issue_text,
-                    fixCommand: r.fix_command,
-                    problemClass: r.problem_class ?? '',
-                    keywords: r.keywords ?? '',
-                    createdAt: new Date(r.created_at),
-                }));
-            }
-        } catch (err) {
-            console.warn('[fix_memory] DB search failed, using in-memory:', err);
-        }
-    }
-
-    // In-memory keyword search
-    const scored = [...memoryFixes.values()]
-        .map(record => ({ record, score: keywordScore(query, record) }))
-        .filter(x => x.score > 0.3)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-
-    return scored.map(x => x.record);
-}
-
-/**
  * Format fix records for injection into the system prompt.
  */
 export function formatFixesForPrompt(fixes: FixRecord[]): string {
+    if (fixes.length === 0) return '';
     return fixes
-        .map(f => {
-            const issue = f.issueText.slice(0, 80);
-            const cmd = f.fixCommand.slice(0, 120);
-            return `- [${f.problemClass}] ${issue} → ${cmd}`;
-        })
+        .map(f =>
+            `- [${f.problemClass}] ${f.issueText.slice(0, 80)} → ${f.fixCommand.slice(0, 120)}`
+        )
         .join('\n');
 }
 
@@ -278,7 +261,7 @@ export function formatFixesForPrompt(fixes: FixRecord[]): string {
 export const fixMemorySearchTool: Tool = {
     name: 'search_fix_memory',
     description:
-        'Searches past problems and their applied fixes using keyword similarity. '
+        'Searches past problems and their applied fixes using semantic similarity. '
         + 'Use this when diagnosing a new issue to see what was previously approved.',
     parameters: {
         type: 'object',

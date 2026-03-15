@@ -28,7 +28,7 @@ export function createSlackApp(): SlackAppInstance {
         appToken: env.SLACK_APP_TOKEN,
         socketMode: true,
         // Using @slack/bolt >= v4 to prevent crashes on 'too_many_websockets' errors
-        logLevel: LogLevel.WARN,
+        logLevel: LogLevel.ERROR,
     });
     slackAppRef = app;
 
@@ -223,9 +223,16 @@ export function createSlackApp(): SlackAppInstance {
     return app;
 }
 
-export async function startSlackApp(app: SlackAppInstance): Promise<void> {
-    await app.start();
-    console.log('[Slack] Socket Mode connected ✓');
+export async function startSlackApp(app: SlackAppInstance): Promise<SlackAppInstance | null> {
+    try {
+        await app.start();
+        console.log('[Slack] Socket Mode connected ✓');
+        return app;
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[Slack] Failed to start Slack Socket Mode (offline?):', msg);
+        return null;
+    }
 }
 
 export async function sendSlackMessage(channel: string, text: string): Promise<void> {

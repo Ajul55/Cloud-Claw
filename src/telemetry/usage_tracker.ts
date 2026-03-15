@@ -24,7 +24,8 @@ const PRICING: Record<string, { in: number; out: number }> = {
     'llama3-8b-8192': { in: 0.05, out: 0.08 },
 
     // MiniMax Settings
-    'abab6.5s-chat': { in: 1.0, out: 1.0 }
+    'abab6.5s-chat': { in: 1.0, out: 1.0 },
+    'minimax-m2.5': { in: 0.8, out: 0.8 },
 };
 
 function calculateCost(model: string, tokensIn: number, tokensOut: number): number {

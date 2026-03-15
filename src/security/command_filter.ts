@@ -15,7 +15,7 @@ interface FilterResult {
 // Each entry: [regex, human-readable reason]
 const BLOCKED_PATTERNS: Array<[RegExp, string]> = [
     // Destructive file operations
-    [/\brm\b(?=.*\s-[^\s]*r)(?=.*\s-[^\s]*f|\s+-[^\s]*r[^\s]*f)/i, 'Recursive force delete is not allowed'],
+    [/\brm\b.*(\s-[a-zA-Z]*[rf][a-zA-Z]*|\s--recursive|\s--force)/i, 'Recursive or force delete is not allowed'],
     [/rm\s+--no-preserve-root/i, 'rm --no-preserve-root is not allowed'],
     [/:\(\)\{.*:\|:&\};:/i, 'Fork bomb detected'],
 
