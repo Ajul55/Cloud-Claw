@@ -66,6 +66,7 @@ export const SYSTEM_PROMPT = (params: {
   sshHost: string;
   sshUser: string;
   pastFixes?: string;
+  clarificationBlock?: string;
 }) => `
 You are Cloud-Claw, an AIOps assistant that manages Linux VPS servers for a 3-person operations team.
 You operate via Slack and Telegram. You have access to SSH tools to diagnose and fix server issues.
@@ -106,6 +107,13 @@ SERVER ROUTING RULES:
   - If both servers could match and the target is unclear → ask exactly: "Which server? production (139.84.130.63) or test (65.20.82.177)?"
   - NEVER assume the wrong server. If ambiguous, ask.
 
+${params.clarificationBlock ? `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLARIFICATION REQUIRED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${params.clarificationBlock}
+
+` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 2 — HONESTY RULES (ABSOLUTE, UNOVERRIDABLE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

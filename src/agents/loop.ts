@@ -10,44 +10,34 @@ import { createHash } from 'crypto';
  *   If fix proposed (Tier-3) → emit approval request → wait
  *   max_iterations = 15 (loop guard)
  *
- * ─── BUGS FIXED IN THIS VERSION ─────────────────────────────────────────────
+ * ─── REFACTORING v2 (March 2026) ─────────────────────────────────────────────
  *
- * BUG 1 (CRITICAL — "says done, nothing happened"):
- *   OLD: tool_choice: (requiresTool && !hasExecutedTool) ? 'required' : 'auto'
- *   After the FIRST tool ran (hasExecutedTool=true), every subsequent LLM call
- *   used tool_choice:'auto'. The LLM then narrated "I will now fix this..." 
- *   instead of calling the next tool in the chain. Nothing got executed.
- *   FIX: tool_choice:'required' whenever the last message in history is a tool
- *   result — meaning we are mid-chain and the LLM MUST continue calling tools.
- *   Only switch to 'auto' when the LLM is wrapping up with a text reply.
- *
- * BUG 2 (Hallucination detector blind spot):
- *   OLD: isHallucination = !hasExecutedTool && patterns.test(text)
- *   After ANY tool ran, hasExecutedTool=true, so the hallucination guard was
- *   completely disabled. The LLM could claim "fix applied successfully" after
- *   only running diagnose_nginx (not fix_nginx_config), and the guard ignored it.
- *   FIX: Track WHICH tools actually ran (receipts Map). Check per-tool:
- *   don't let the LLM claim fix success unless fix_nginx_config actually ran
- *   and succeeded.
- *
- * BUG 3 (tool_choice:'required' with no tools defined crashes some providers):
- *   Added guard: only set tool_choice:'required' if tools array is non-empty.
- *
- * BUG 4 (Session lost on unexpected throw inside tool loop):
- *   Wrapped tool execution in try/catch so session is always persisted even if
- *   a single tool throws unexpectedly.
+ * 1. Removed pendingAutoChain — inline auto-chain as direct tool execution
+ * 2. Receipt freshness: clear on new intent, added expectedOutputHash
+ * 3. Hallucination guard: READ/WRITE receipt split (delegated to hallucination_guard.ts)
+ * 4. SSH rate limiter: Map<string, number> instead of Set<string>
+ * 5. stripEphemeralMessages: extended filter + session length guard
+ * 6. Fanout Promise.all: 30s per-server timeout
+ * 7. getToolApprovalRequest: simplified to registry lookup
+ * 8. Intent classifier hint: soft suggestion for nginx
+ * 9. encodeApprovalArgs: fixed double-encoding
+ * 10. dynamicPrompt: clarification injected via SYSTEM_PROMPT parameter
+ * 11. SSH key injection blocked (command_filter + tool_guard)
+ * 12. Server disambiguation for generic prompts
+ * 13-17. Quality fixes (buildProgressSummary, WRITE_TOOLS, messages binding, canRequireTool)
  */
 
 import OpenAI from 'openai';
 import { env } from '../config/env.js';
 import { getLLMClient } from '../llm/provider.js';
 import { getSession, upsertSession, createApproval, getLatestPendingApproval } from '../database/db.js';
-import { getLLMToolDefinitions, getToolByName } from '../tools/tool_registry.js';
+import { getLLMToolDefinitions, getToolByName, getAllTools } from '../tools/tool_registry.js';
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
+import { recordToolUsage } from '../telemetry/ssh_escalation_analyzer.js';
 import { checkCommand, requiresApproval, isWriteCommand } from '../security/command_filter.js';
 import { classifyIntent } from './intent_classifier.js';
 import { checkForHallucination } from './hallucination_guard.js';
-import { sanitizeToolOutput } from './tool_guard.js';
+import { sanitizeToolOutput, checkWriteTarget } from './tool_guard.js';
 import { SYSTEM_PROMPT } from '../config/system_prompt.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { touchSession } from '../jobs/timeout_sessions.js';
@@ -70,6 +60,33 @@ import type {
 const MAX_ITERATIONS = 15;
 // Receipts older than this are considered stale and should not bypass guards
 const RECEIPT_FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
+
+// ─── Lazy load WRITE_TOOLS to prevent module init crashes ────────────────────
+let WRITE_TOOLS: Set<string> | null = null;
+function getWriteTools(): Set<string> {
+    if (!WRITE_TOOLS) {
+        WRITE_TOOLS = new Set(getAllTools().filter(t => t.approvalTier === 3).map(t => t.name));
+    }
+    return WRITE_TOOLS;
+}
+
+// ─── Hoisted constants (avoid re-creating on every tool call) ──────────────────
+const SSH_TOOLS = new Set([
+    'execute_ssh_command', 'execute_ssh_write', 'diagnose_nginx',
+    'diagnose_services', 'diagnose_domain', 'fix_nginx_config',
+    'renew_ssl', 'manage_php', 'repair_mysql', 'cleanup_disk',
+    'fix_wordpress', 'create_nginx_vhost'
+]);
+
+const MEMORY_TOOLS = new Set([
+    'fix_nginx_config', 'fix_wordpress', 'renew_ssl', 'manage_php',
+    'repair_mysql', 'cleanup_disk', 'execute_ssh_write', 'cloudflare_cache_purge',
+]);
+
+const SENSITIVE_PATTERNS = [
+    /private.*key/i, /ssh.*key/i, /password/i,
+    /secret/i, /token/i, /\.env/i,
+];
 
 function containsInternalToolSyntax(text: string): boolean {
     return /\bfunctions\.[a-z_]+\s*\(/i.test(text)
@@ -110,32 +127,35 @@ function summarizeText(text: string, maxLength = 220): string {
         : collapsed;
 }
 
+// Quality fix #13: rewrite as filter + slice instead of reverse-iterate + .reverse()
 function buildProgressSummary(messages: OpenAI.ChatCompletionMessageParam[]): string {
-    const summaryLines: string[] = [];
-
-    for (let index = messages.length - 1; index >= 0 && summaryLines.length < 5; index--) {
-        const msg = messages[index] as any;
-
-        if (msg.role === 'tool') {
-            const text = summarizeText(getMessageText(msg.content), 220);
-            if (text) summaryLines.push(`- Tool result: ${text}`);
-            continue;
-        }
-
-        if (msg.role === 'assistant' && typeof msg.content === 'string' && !containsInternalToolSyntax(msg.content)) {
-            const text = summarizeText(msg.content, 160);
-            if (text) summaryLines.push(`- Assistant: ${text}`);
-            continue;
-        }
-
-        if (msg.role === 'user') {
-            const text = summarizeText(getMessageText(msg.content), 160);
-            if (text) summaryLines.push(`- Pilot: ${text}`);
-        }
-    }
+    const summaryLines = messages
+        .filter((msg: any) => {
+            if (msg.role === 'tool') return true;
+            if (msg.role === 'assistant' && typeof msg.content === 'string' && !containsInternalToolSyntax(msg.content)) return true;
+            if (msg.role === 'user') return true;
+            return false;
+        })
+        .slice(-5)
+        .map((msg: any) => {
+            if (msg.role === 'tool') {
+                const text = summarizeText(getMessageText(msg.content), 220);
+                return text ? `- Tool result: ${text}` : null;
+            }
+            if (msg.role === 'assistant' && typeof msg.content === 'string') {
+                const text = summarizeText(msg.content, 160);
+                return text ? `- Assistant: ${text}` : null;
+            }
+            if (msg.role === 'user') {
+                const text = summarizeText(getMessageText(msg.content), 160);
+                return text ? `- Pilot: ${text}` : null;
+            }
+            return null;
+        })
+        .filter(Boolean) as string[];
 
     return summaryLines.length > 0
-        ? summaryLines.reverse().join('\n')
+        ? summaryLines.join('\n')
         : '- No concrete findings captured yet.';
 }
 
@@ -180,23 +200,26 @@ function recordReceipt(
     key: string,
     success: boolean,
     host: string,
-    output: string
+    outputOrHash: string,
+    isAlreadyHashed = false
 ): void {
     receipts.set(key, {
         toolName: key.includes(':') ? key.split(':')[0] : key,
         success,
         host,
         timestamp: Date.now(),
-        outputHash: hashOutput(output ?? ''),
+        outputHash: isAlreadyHashed ? outputOrHash : hashOutput(outputOrHash ?? ''),
     });
 }
 
+// Fix #2: added optional expectedOutputHash parameter
 export function hasReceipt(
     receipts: Map<string, ToolReceipt>,
     toolNames: string | string[],
     requireSuccess = false,
     maxAgeMs?: number,
-    expectedHost?: string
+    expectedHost?: string,
+    expectedOutputHash?: string
 ): boolean {
     const list = Array.isArray(toolNames) ? toolNames : [toolNames];
     const now = Date.now();
@@ -208,32 +231,17 @@ export function hasReceipt(
         if (requireSuccess && !rec.success) return false;
         if (maxAgeMs && now - rec.timestamp > maxAgeMs) return false;
         if (expected && rec.host?.toLowerCase().trim() !== expected) return false;
+        if (expectedOutputHash && rec.outputHash !== expectedOutputHash) return false;
         return true;
     });
 }
 
-// ─── Output Sanitization (Layer 3) ───────────────────────────────────────────
-
-
-// ─── Audit Guard ───────────────────────────────────────────────────────────────
-const WRITE_TOOLS = new Set([
-    'fix_nginx_config',
-    'execute_ssh_write',
-    'cloudflare_cache_purge',
-    'fix_wordpress',
-    'renew_ssl',
-    'manage_php',
-    'repair_mysql',
-    'cleanup_disk',
-    'create_nginx_vhost',
-]);
-
+// ─── Fix #9: encodeApprovalArgs — no double-encoding ─────────────────────────
 function encodeApprovalArgs(toolArgs: Record<string, unknown>): Record<string, string> {
     return Object.fromEntries(
         Object.entries(toolArgs).map(([key, value]) => {
-            if (Array.isArray(value) || (value && typeof value === 'object')) {
-                return [key, JSON.stringify(value)];
-            }
+            if (typeof value === 'string') return [key, value]; // already a string, never re-encode
+            if (Array.isArray(value) || (value && typeof value === 'object')) return [key, JSON.stringify(value)];
             return [key, String(value ?? '')];
         })
     );
@@ -254,99 +262,21 @@ function toolSupportsServerRouting(tool: { parameters: { properties: Record<stri
         || Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'host');
 }
 
+// ─── Fix #7: Simplified getToolApprovalRequest — registry lookup with fallback
 function getToolApprovalRequest(
     toolName: string,
     toolArgs: Record<string, unknown>
 ): { command: string; targetHost: string; rationale: string } | null {
-    if (toolName === 'fix_nginx_config') {
-        const host = String(toolArgs.host ?? 'unknown');
-        const filePath = String(toolArgs.file_path ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, file_path: filePath })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: 'This action will edit Nginx config and restart Nginx.',
-        };
-    }
-
-    if (toolName === 'fix_wordpress') {
-        const host = String(toolArgs.host ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, site_root: String(toolArgs.site_root ?? '') })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: 'This action will modify wp-config.php to enable WP_DEBUG.',
-        };
-    }
-
-    if (toolName === 'renew_ssl') {
-        const host = String(toolArgs.host ?? 'unknown');
-        const domain = String(toolArgs.domain ?? 'all');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, domain })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: `This action will renew SSL certificate${domain !== 'all' ? ` for ${domain}` : 's'} using Certbot.`,
-        };
-    }
-
-    if (toolName === 'manage_php' && String(toolArgs.action ?? '') === 'switch') {
-        const host = String(toolArgs.host ?? 'unknown');
-        const ver = String(toolArgs.target_version ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'switch', target_version: ver })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: `This action will switch PHP-FPM to version ${ver} (stop old, start new).`,
-        };
-    }
-
-    if (toolName === 'repair_mysql' && String(toolArgs.action ?? '') === 'repair') {
-        const host = String(toolArgs.host ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'repair' })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: 'This action will run mysqlcheck --auto-repair on all databases.',
-        };
-    }
-
-    if (toolName === 'cleanup_disk' && String(toolArgs.action ?? '') === 'cleanup') {
-        const host = String(toolArgs.host ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, action: 'cleanup' })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: 'This action will truncate old logs, remove old tmp files, and vacuum journal.',
-        };
-    }
-
-    if (toolName === 'cloudflare_cache_purge') {
-        const mode = String(toolArgs.mode ?? 'url');
-        let targetHost = `Cloudflare (${env.CLOUDFLARE_DOMAIN ?? 'configured zone'})`;
-        if (mode === 'url') {
-            const urlsRaw = toolArgs.urls;
-            const urls = Array.isArray(urlsRaw)
-                ? urlsRaw.map((value) => String(value))
-                : String(urlsRaw ?? '').split(',').map((value) => value.trim()).filter(Boolean);
-            targetHost = urls.join(', ') || targetHost;
-        }
-
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs(toolArgs)),
-            targetHost,
-            rationale: mode === 'everything'
-                ? `This action will purge the entire Cloudflare cache for ${env.CLOUDFLARE_DOMAIN ?? 'the configured zone'}.`
-                : `This action will purge Cloudflare cache for ${targetHost}.`,
-        };
-    }
-
-    if (toolName === 'create_nginx_vhost') {
-        const host = String(toolArgs.host ?? 'unknown');
-        const domain = String(toolArgs.domain ?? 'unknown');
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs({ ...toolArgs, host, domain })),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: `Create new nginx vhost for ${domain} on ${host} and reload nginx.`,
-        };
-    }
-
     const tool = getToolByName(toolName);
-    if (tool?.approvalTier === 3) {
+    if (!tool) return null;
+
+    // Check if tool has its own approval request builder
+    if (tool.getApprovalRequest) {
+        return tool.getApprovalRequest(toolArgs);
+    }
+
+    // Check approval tier from registry
+    if (tool.approvalTier === 3) {
         return {
             command: encodeToolApprovalCommand(toolName, encodeApprovalArgs(toolArgs)),
             targetHost: getTargetHostDisplay(toolArgs),
@@ -356,6 +286,61 @@ function getToolApprovalRequest(
     }
 
     return null;
+}
+
+// ─── Fix #6: Fanout timeout helper ────────────────────────────────────────────
+function withTimeout(
+    p: Promise<{ success: boolean; output: string }>,
+    ms: number,
+    label: string
+): Promise<{ success: boolean; output: string }> {
+    return Promise.race([
+        p,
+        new Promise<{ success: boolean; output: string }>(res =>
+            setTimeout(() => res({ success: false, output: `[${label}] Timed out after ${ms / 1000}s` }), ms)
+        ),
+    ]);
+}
+
+// ─── Fix #5: Extended stripEphemeralMessages ──────────────────────────────────
+function stripEphemeralMessages(
+    msgs: OpenAI.ChatCompletionMessageParam[]
+): OpenAI.ChatCompletionMessageParam[] {
+    const filtered = msgs.filter((m: any) => {
+        // Strip user-role ephemeral messages
+        if (m.role === 'user' && typeof m.content === 'string') {
+            if (m.content.startsWith('[AUTO-CHAIN]')
+                || m.content.startsWith('[AUTO')
+                || m.content.startsWith('[SYSTEM GUARD]')
+                || m.content.startsWith('[SYSTEM]')
+                || m.content.startsWith('[HALLUCINATION')
+                || m.content.startsWith('[GUARD')
+            ) {
+                return false;
+            }
+        }
+        // Strip assistant-role messages with [AUTO-CHAIN] content (legacy cleanup)
+        if (m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('[AUTO-CHAIN]')) {
+            return false;
+        }
+        return true;
+    });
+
+    // Session length guard: cap at 40 messages from a clean user-role boundary
+    if (filtered.length > 60) {
+        let startIndex = filtered.length - 40;
+        while (startIndex < filtered.length && filtered[startIndex].role !== 'user') {
+            startIndex++;
+        }
+        if (startIndex >= filtered.length) {
+            // Fallback: no user message found, trim strictly to 40 but drop leading tools
+            startIndex = filtered.length - 40;
+            while (startIndex < filtered.length && filtered[startIndex].role === 'tool') startIndex++;
+        }
+        return filtered.slice(startIndex);
+    }
+
+    return filtered;
 }
 
 // ─── System prompt ─────────────────────────────────────────────────────────────
@@ -415,9 +400,6 @@ export async function runAgentLoop(
             return clean as OpenAI.ChatCompletionMessageParam;
         });
 
-    const priorConversationCount = messages.filter(
-        (m: any) => m.role === 'user' || m.role === 'assistant'
-    ).length;
     const priorToolLines = messages
         .filter((m: any) => m.role === 'tool')
         .map((m: any) => summarizeText(getMessageText(m.content).split('\n')[0] ?? '', 160))
@@ -433,10 +415,37 @@ export async function runAgentLoop(
 
     let iteration = 0;
     let internalSyntaxRetryUsed = false;
-    let pendingAutoChain: { name: string; args: Record<string, unknown> } | null = null;
 
-    // Layer 4 receipts: track tools that actually ran (and whether they succeeded)
-    const executionReceipts = loadReceiptsFromSession(session?.receipts);
+    // Fast-path: user explicitly typed proceed/approve/reject while an approval is pending
+    const normalized = (message.text ?? '').trim().toLowerCase();
+    const pending = await getLatestPendingApproval(message.sessionId);
+    if (normalized && pending) {
+        if (['proceed', 'approve', 'yes', 'apply', 'fix', 'do it'].some(k => normalized === k)) {
+            await resumeApprovedSession(pending.id, true, message.userId, onReply, onApproval);
+            await indicator?.stop(true);
+            return;
+        }
+        if (['reject', 'no', 'stop', 'cancel'].some(k => normalized === k)) {
+            await resumeApprovedSession(pending.id, false, message.userId, onReply, onApproval);
+            await indicator?.stop(true);
+            return;
+        }
+    }
+
+    // Fix #2: Clear receipts on new user intent (not a resume)
+    const isFastPathApproval = message.text && pending && ['proceed', 'approve', 'yes', 'apply', 'fix', 'do it'].some(k => normalized === k);
+    const isFastPathRejection = message.text && pending && ['reject', 'no', 'stop', 'cancel'].some(k => normalized === k);
+    const isResume = (Array.isArray(message.resumedTools) && message.resumedTools.length > 0) || isFastPathApproval || isFastPathRejection;
+
+    let executionReceipts: Map<string, ToolReceipt>;
+    if (message.text && !isResume) {
+        // New user intent — start fresh, don't inherit receipts from previous conversation turns
+        executionReceipts = new Map<string, ToolReceipt>();
+        console.log('[loop] New user intent detected — cleared previous receipts');
+    } else {
+        executionReceipts = loadReceiptsFromSession(session?.receipts);
+    }
+
     if (message.resumedTools) {
         for (const t of message.resumedTools) {
             if (!executionReceipts.has(t)) {
@@ -451,38 +460,11 @@ export async function runAgentLoop(
             console.log(`[loop] Seeded receipt from resume: ${t}`);
         }
     }
-    // Track tools executed in this loop leg only (for tool_choice logic)
-    const currentLegTools = new Set<string>();
+
+    // Fix #4: Track tools executed in this loop leg with counts (not a Set)
+    const currentLegCounts = new Map<string, number>();
 
     await indicator?.start('🔍 Analysing your request...');
-
-    // Fast-path: user explicitly typed proceed/approve/reject while an approval is pending
-    const normalized = (message.text ?? '').trim().toLowerCase();
-    if (normalized) {
-        const pending = await getLatestPendingApproval(message.sessionId);
-        if (pending && ['proceed', 'approve', 'yes', 'apply', 'fix', 'do it'].some(k => normalized === k)) {
-            await resumeApprovedSession(
-                pending.id,
-                true,
-                message.userId,
-                onReply,
-                onApproval
-            );
-            await indicator?.stop(true);
-            return;
-        }
-        if (pending && ['reject', 'no', 'stop', 'cancel'].some(k => normalized === k)) {
-            await resumeApprovedSession(
-                pending.id,
-                false,
-                message.userId,
-                onReply,
-                onApproval
-            );
-            await indicator?.stop(true);
-            return;
-        }
-    }
 
     const intent = await classifyIntent(message.text ?? '');
     const requiresTool = intent.requiresTool;
@@ -500,21 +482,46 @@ export async function runAgentLoop(
 
     // If the user is sending a new message (not a resume) and the session has many
     // old messages, trim to prevent context pollution from previous conversations.
-    // Keep: system prompt (injected separately) + last few messages + the new user msg.
-    if (message.text && !message.resumedTools && messages.length > 20) {
+    // Fix #15: use let reassignment instead of in-place mutation
+    const userTurnCount = messages.filter((m: any) => m.role === 'user').length;
+    if (message.text && !isResume && userTurnCount > 3) {
         let startIndex = messages.length - 6;
         // Move backwards to find a clean boundary (user message) so we don't sever
         // an assistant tool_call from its tool responses.
         while (startIndex > 0 && messages[startIndex].role !== 'user') {
             startIndex--;
         }
-        const trimmed = messages.slice(startIndex);
-        messages.length = 0;
-        messages.push(...trimmed);
+        messages = messages.slice(startIndex);
         console.log(`[loop] Trimmed session safely to ${messages.length} messages`);
     }
 
+    // ─── Fix #12: Server disambiguation for generic prompts ────────────────
+    // Placed AFTER session sanitization so persisted messages are clean.
+    const isGenericWithoutServer = requiresTool && (!intent.targetServer || intent.targetServer === 'unknown');
+    if (intent.requiresServerClarification || isGenericWithoutServer) {
+        const allServers = await getAllServers();
+        if (allServers.length > 1 && isGenericWithoutServer) {
+            const serverList = allServers.map(s => `• ${s.label} (${s.ip})`).join('\n');
+            await onReply(
+                `Which server should I run this on?\n${serverList}\n\nReply with the server name (e.g. "production" or "test").`
+            );
+            await upsertSession({
+                id: message.sessionId,
+                channel: message.channel,
+                user_id: message.userId,
+                reply_target: message.replyTarget ?? session?.reply_target ?? null,
+                messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+                receipts: serializeReceipts(executionReceipts),
+                iteration,
+            });
+            await indicator?.stop(true);
+            return;
+        }
+    }
+
     const toolDefinitions = getLLMToolDefinitions();
+    // Fix #17: centralise canRequireTool guard
+    const canRequireTool = toolDefinitions.length > 0;
 
     // ─── Fix Memory: fetch past fixes ────────────────────────────────────────
     let pastFixesStr = '';
@@ -540,12 +547,6 @@ export async function runAgentLoop(
         }
     }
 
-    let dynamicPrompt = SYSTEM_PROMPT({
-        sshHost: '139.84.130.63',
-        sshUser: 'root',
-        pastFixes: pastFixesStr || undefined
-    });
-
     const recentToolFailures = messages
         .filter((m: any) => m.role === 'tool')
         .slice(-6)
@@ -558,150 +559,132 @@ export async function runAgentLoop(
         && !message.resumedTools
         && !intent.isApprovalResponse;
 
-    if (shouldPauseForClarification) {
-        dynamicPrompt = `Before acting, summarize: (1) what the desired state is, (2) what has already been tried,
+    // Fix #10: clarification injected via SYSTEM_PROMPT parameter, not prepended
+    const clarificationBlock = shouldPauseForClarification
+        ? `Before acting, summarize: (1) what the desired state is, (2) what has already been tried,
 (3) your root cause hypothesis. Ask Pilot to confirm before making any changes.
 
 Recent tool attempts:
-${priorToolLines || 'No prior tool outputs recorded.'}
-
-` + dynamicPrompt;
-    }
+${priorToolLines || 'No prior tool outputs recorded.'}`
+        : undefined;
 
     while (iteration < MAX_ITERATIONS) {
         iteration++;
         console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
 
-        // ─── FIX BUG 1: tool_choice logic ─────────────────────────────────────
-        // OLD (broken): (requiresTool && !hasExecutedTool) ? 'required' : 'auto'
-        //   → After first tool ran, always used 'auto' → LLM narrated instead of chaining
-        //
-        // NEW (correct): Use 'required' when we are mid-chain (last message is a
-        // tool result). This forces the LLM to keep calling tools until it has
-        // consumed all pending tool results and is ready to give a final answer.
-        // Use 'required' also on the first call if this request needs tools.
-        // Use 'auto' only when the LLM has seen all results and needs to wrap up.
-        //
-        // NGINX OVERRIDE: On the first call, if the query is nginx-related,
-        // force the LLM to call diagnose_nginx specifically (not just any tool).
-        //
-        // Guard: only set 'required' if tools are actually defined (crashes some providers otherwise).
+        // Fix #11: Base prompt is built inside the loop so clarification block stays fresh
+        const baseSystemPrompt = SYSTEM_PROMPT({
+            sshHost: '139.84.130.63',
+            sshUser: 'root',
+            pastFixes: pastFixesStr || undefined,
+            clarificationBlock,
+        });
+
+        // Fix #8: rebuild nginx hint per-iteration so it only appears when no tools have run
+        let dynamicPromptHint = '';
+        if (requiresNginx && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
+            dynamicPromptHint = 'Hint: this query is likely nginx-related. Start with diagnose_nginx unless PHP or MySQL symptoms are more prominent.\n\n';
+        }
+        const fullSystemPrompt = dynamicPromptHint + baseSystemPrompt;
+
+        // ─── tool_choice logic ─────────────────────────────────────────────
         const lastMsg = messages[messages.length - 1];
         const isMidChain = lastMsg?.role === 'tool';
-        const isFirstToolCall = requiresTool && currentLegTools.size === 0;
+        const isFirstToolCall = requiresTool && iteration === 1;
 
-        // BUG FIX: On resume, the last message is a 'tool' result. If we force
-        // 'required' here, the LLM is forced to call *another* tool even if it
-        // has enough information to reply. We should only force 'required' mid-chain
-        // if we are explicitly chaining (e.g. diagnose -> fix). If the LLM just ran
-        // a fix, it should be allowed to summarize instead of being forced to call again.
-        // We'll trust the LLM's own decision ('auto') if we are mid-chain and it's not
-        // the very first interaction.
-        const shouldRequireTool = toolDefinitions.length > 0 && (isMidChain || isFirstToolCall);
+        const shouldRequireTool = canRequireTool && (isMidChain || isFirstToolCall);
 
         let toolChoice: OpenAI.ChatCompletionToolChoiceOption;
         if (shouldPauseForClarification && iteration === 1) {
             toolChoice = 'none';
             console.log('[loop] Forcing tool_choice: none (long conversation clarification gate)');
-        } else if (requiresCloudflarePurge && currentLegTools.size === 0 && !hasReceipt(executionReceipts, 'cloudflare_cache_purge', true, RECEIPT_FRESHNESS_MS)) {
-            toolChoice = { type: 'function', function: { name: 'cloudflare_cache_purge' } };
+        } else if (requiresCloudflarePurge && iteration === 1 && !hasReceipt(executionReceipts, 'cloudflare_cache_purge', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'cloudflare_cache_purge' } }
+                : 'auto';
             console.log('[loop] Forcing tool_choice: cloudflare_cache_purge (explicit cache purge request detected)');
-        } else if (requiresDomainDiagnosis && currentLegTools.size === 0 && !hasReceipt(executionReceipts, 'diagnose_domain', true, RECEIPT_FRESHNESS_MS)) {
-            toolChoice = { type: 'function', function: { name: 'diagnose_domain' } };
+        } else if (requiresDomainDiagnosis && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_domain', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'diagnose_domain' } }
+                : 'auto';
             console.log('[loop] Forcing tool_choice: diagnose_domain (domain routing query detected)');
-        } else if (requiresNginx && currentLegTools.size === 0 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
-            // Force diagnose_nginx on first call for nginx/website queries
-            toolChoice = { type: 'function', function: { name: 'diagnose_nginx' } };
-            console.log('[loop] Forcing tool_choice: diagnose_nginx (nginx/website query detected)');
+        } else if (requiresNginx && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
+            // Fix #8: soft suggestion — require A tool but don't mandate which one
+            toolChoice = shouldRequireTool ? 'required' : 'auto';
+            console.log('[loop] Nginx hint injected into prompt — requiring a tool call (soft, not forced)');
         } else {
-            // Revert back to 'required' for MiniMax compatibility
             toolChoice = shouldRequireTool ? 'required' : 'auto';
         }
         // ──────────────────────────────────────────────────────────────────────
 
-        // 3. Call LLM OR trigger auto-chain
+        // 3. Call LLM
         let choice: OpenAI.ChatCompletion.Choice;
         let reqStart = Date.now();
         const { client: openai, model: activeModel } = getLLMClient();
         let reqLatency = 0;
 
-        if (pendingAutoChain) {
-            console.log('[loop] Bypassing LLM call for auto-chain:', pendingAutoChain.name);
-            choice = {
-                index: 0,
-                message: {
-                    role: 'assistant',
-                    content: `[AUTO-CHAIN] Diagnosed issue requires ${pendingAutoChain.name}. Executing automatically.`,
-                    refusal: null,
-                    tool_calls: [{
-                        id: `call_auto_${Date.now()}`,
-                        type: 'function',
-                        function: {
-                            name: pendingAutoChain.name,
-                            arguments: JSON.stringify(pendingAutoChain.args)
-                        }
-                    }]
-                },
-                logprobs: null,
-                finish_reason: 'tool_calls'
-            };
-            pendingAutoChain = null;
-        } else {
-            // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain,
-            // which guarantees we never hit the 2013 "tool id not found" provider error.
-            const validToolIds = new Set<string>();
-            messages = messages.filter((msg: any) => {
-                if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
-                    // Register valid IDs
-                    msg.tool_calls.forEach((tc: any) => {
-                        if (tc.id) validToolIds.add(tc.id);
-                    });
-                } else if (msg.role === 'tool') {
-                    if (!msg.tool_call_id || !validToolIds.has(msg.tool_call_id)) {
-                        console.warn(`[loop] Dropping orphaned tool message with ID ${msg.tool_call_id}`);
-                        return false; // Safely strip this from the request
-                    }
-                }
-                return true;
-            });
-
-            try {
-                console.log('[loop] Outgoing messages to API:', JSON.stringify(messages, null, 2));
-                const response = await openai.chat.completions.create({
-                    model: activeModel,
-                    messages: [{ role: 'system', content: dynamicPrompt }, ...messages],
-                    tools: toolDefinitions,
-                    tool_choice: toolChoice,
-                    temperature: 0.2,
+        // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain,
+        // which guarantees we never hit the 2013 "tool id not found" provider error.
+        const validToolIds = new Set<string>();
+        messages = messages.filter((msg: any) => {
+            if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+                // Register valid IDs
+                msg.tool_calls.forEach((tc: any) => {
+                    if (tc.id) validToolIds.add(tc.id);
                 });
-                reqLatency = Date.now() - reqStart;
-                choice = response.choices[0];
-
-                // Handle usage tracking
-                const usage = response.usage;
-                if (usage) {
-                    const calledTools = choice.message?.tool_calls?.map((t: any) => t.function.name).join(',') || undefined;
-                    void trackUsage({
-                        sessionId: message.sessionId,
-                        model: activeModel,
-                        tokensIn: usage.prompt_tokens,
-                        tokensOut: usage.completion_tokens,
-                        latencyMs: reqLatency,
-                        toolName: calledTools
-                    });
+            } else if (msg.role === 'tool') {
+                if (!msg.tool_call_id || !validToolIds.has(msg.tool_call_id)) {
+                    console.warn(`[loop] Dropping orphaned tool message with ID ${msg.tool_call_id}`);
+                    return false; // Safely strip this from the request
                 }
-            } catch (err: any) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error('[loop] LLM error:', msg);
-                if (err.error?.failed_generation) {
-                    console.error('[loop] Failed generation:', err.error.failed_generation);
-                } else if (err.failed_generation) {
-                    console.error('[loop] Failed generation:', err.failed_generation);
-                }
-                await indicator?.stop();
-                await onReply(`❌ LLM error: ${msg}`);
-                break;
             }
+            return true;
+        });
+
+        try {
+            // Trim session to last 20 messages before each LLM call (Fix for BUG-10)
+            // Always keep the first message (original request context)
+            const MAX_HISTORY = 20;
+            const trimmedMessages = messages.length > MAX_HISTORY
+                ? [messages[0], ...messages.slice(-MAX_HISTORY + 1)]
+                : messages;
+
+            console.log(`[loop] Outgoing messages to API (trimmed from ${messages.length} to ${trimmedMessages.length})`);
+            
+            const response = await openai.chat.completions.create({
+                model: activeModel,
+                messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
+                tools: toolDefinitions,
+                tool_choice: toolChoice,
+                temperature: 0.2,
+            });
+            reqLatency = Date.now() - reqStart;
+            choice = response.choices[0];
+
+            // Handle usage tracking
+            const usage = response.usage;
+            if (usage) {
+                const calledTools = choice.message?.tool_calls?.map((t: any) => t.function.name).join(',') || undefined;
+                void trackUsage({
+                    sessionId: message.sessionId,
+                    model: activeModel,
+                    tokensIn: usage.prompt_tokens,
+                    tokensOut: usage.completion_tokens,
+                    latencyMs: reqLatency,
+                    toolName: calledTools
+                });
+            }
+        } catch (err: any) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[loop] LLM error:', msg);
+            if (err.error?.failed_generation) {
+                console.error('[loop] Failed generation:', err.error.failed_generation);
+            } else if (err.failed_generation) {
+                console.error('[loop] Failed generation:', err.failed_generation);
+            }
+            await indicator?.stop();
+            await onReply(`❌ LLM error: ${msg}`);
+            break;
         }
 
         if (choice.message?.content) {
@@ -728,7 +711,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 internalSyntaxRetryUsed = true;
                 messages.push({ role: 'assistant', content: text });
                 messages.push({
-                    role: 'system',
+                    role: 'user',
                     content:
                         '[SYSTEM] Tool syntax detected in your last response. '
                         + 'Do not output functions.* or <minimax:tool_call> syntax. '
@@ -737,42 +720,8 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 continue;
             }
 
-            // ─── FIX BUG 2: Hallucination detection per-tool ──────────────────
-            // OLD (broken): !hasExecutedTool — guard was completely off once ANY tool ran.
-            // NEW: Check per-claim. Don't allow fix/restart success claims unless
-            //      the relevant tool is in executedTools.
-            const hallucinationPatterns: Array<{ pattern: RegExp; requiresTool?: string }> = [
-                // Fix/repair claims — only valid if fix_nginx_config actually ran
-                { pattern: /configuration (has been|was) (successfully |)repaired/i, requiresTool: 'fix_nginx_config' },
-                { pattern: /(service|nginx|mariadb|mysql) has been restarted/i, requiresTool: 'fix_nginx_config' },
-                { pattern: /fix (was|has been) applied/i, requiresTool: 'fix_nginx_config' },
-                { pattern: /issue (has been|is now|was) (resolved|fixed|solved)/i, requiresTool: 'fix_nginx_config' },
-                { pattern: /successfully (restarted|repaired|resolved|fixed|applied)/i, requiresTool: 'fix_nginx_config' },
-                // Service status claims — only valid if execute_ssh_command or diagnose_nginx ran
-                { pattern: /(nginx|mariadb|mysql|apache|php|redis|postgres) is (now |currently )?(active|running|up|fixed|resolved)/i, requiresTool: 'execute_ssh_command' },
-                // Planning language — always a hallucination signal (never valid)
-                { pattern: /steps taken:/i },
-                { pattern: /outcome:/i },
-                { pattern: /please (give me a moment|allow me a moment|wait while)/i },
-                { pattern: /i (have|'ve) (applied|fixed|repaired|restarted|resolved)/i },
-                { pattern: /i('ll| will) now (apply|run|execute|perform|initiate)/i },
-                { pattern: /let me (now |)(run|execute|apply|check|diagnose)/i },
-                { pattern: /i('ll| will) (start|begin) by/i },
-            ];
-
-            const isHallucination = hallucinationPatterns.some(({ pattern, requiresTool: req }) => {
-                if (!pattern.test(text)) return false;
-                if (req) {
-                    const relatedTools: Record<string, string[]> = {
-                        'execute_ssh_command': ['execute_ssh_command', 'diagnose_nginx'],
-                        'fix_nginx_config': ['fix_nginx_config'],
-                    };
-                    const acceptable = relatedTools[req] ?? [req];
-                    return !hasReceipt(executionReceipts, acceptable, true, RECEIPT_FRESHNESS_MS);
-                }
-                return true; // planning language
-            });
-            // ──────────────────────────────────────────────────────────────────
+            // ─── Fix #3: Hallucination detection — delegated to hallucination_guard.ts ──
+            const isHallucination = checkForHallucination(text, executionReceipts, RECEIPT_FRESHNESS_MS);
 
             if (isHallucination) {
                 console.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution');
@@ -781,7 +730,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 await onReply('⚠️ I need to verify this with real diagnostics. Running tools now — you may see a short pause.');
                 messages.push({ role: 'assistant', content: text });
                 messages.push({
-                    role: 'system',
+                    role: 'user',
                     content: `[SYSTEM GUARD] Hallucination detected. No successful receipt found for required tool. `
                         + `Receipts on record: [${[...executionReceipts.keys()].join(', ') || 'none'}]. `
                         + 'Call the required diagnostic or fix tool NOW via the tool API. '
@@ -794,14 +743,9 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 ? 'I am still processing this request. Please retry if you do not receive results in a moment.'
                 : text;
 
-            // If the model still avoided tool use on the very first call while tools
-            // are required, it means tool_choice:'required' failed (provider issue).
-            // This is often because the LLM lacks the specific tool requested (e.g. write access).
-            // We should let the user see the LLM's explanation rather than fabricating an SSH error.
             if (requiresTool && executionReceipts.size === 0) {
                 console.error('[loop] LLM avoided tool call despite tool_choice:required — possible provider issue or missing tool');
                 console.error('[loop] Raw text returned instead of tool call:', text);
-                // Fall through to show the user the text, but log it.
             }
 
             await indicator?.stop();
@@ -883,15 +827,29 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                             toolArgs.host = server.ip;
                         }
                     } else {
-                        const server = await resolveServerFromMessage(message.text ?? '');
-                        if (!server && (await getAllServers()).length > 1) {
+                        // No server explicitly specified by the LLM
+                        const isWriteOp = (tool.approvalTier ?? 0) >= 2;
+
+                        if (isWriteOp) {
+                            // ─── Fix 1: Single-Server Write Lock ──────────────────────
+                            // Write operations MUST have an explicit server reference.
+                            // Even if only one server exists, we stop and ask.
+                            const allServers = await getAllServers();
+                            const serverList = allServers.map(s => `• ${s.label} (${s.ip})`).join('\n');
                             messages.push({
                                 role: 'tool',
                                 tool_call_id: toolCall.id,
-                                content: 'Error: Server target is ambiguous. Ask the Pilot which server to use: production (139.84.130.63) or test (65.20.82.177). Do not assume.',
+                                content: `BLOCKED: Write operations require an explicit server target. `
+                                    + `The user did not specify which server to run "${toolName}" on.\n`
+                                    + `Available servers:\n${serverList}\n\n`
+                                    + `Ask the user: "Which server should I run this on?" and wait for their answer. `
+                                    + `Do NOT guess or default.`,
                             });
                             continue;
                         }
+
+                        // Read-only tools can silently default
+                        const server = await resolveServerFromMessage(message.text ?? '');
                         if (server) {
                             toolArgs.server_label = server.label;
                             toolArgs.host = server.ip;
@@ -901,7 +859,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
             }
 
             // AUDIT GUARD — code-level, cannot be overridden by LLM
-            if (intent.isAudit && WRITE_TOOLS.has(toolName)) {
+            if (intent.isAudit && getWriteTools().has(toolName)) {
                 console.warn(`[loop] AUDIT GUARD blocked write tool "${toolName}" during audit`);
                 messages.push({
                     role: 'tool',
@@ -911,7 +869,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 continue;
             }
 
-            if (String(toolArgs.server_label ?? '').toLowerCase() === 'all' && WRITE_TOOLS.has(toolName)) {
+            if (String(toolArgs.server_label ?? '').toLowerCase() === 'all' && getWriteTools().has(toolName)) {
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -920,8 +878,36 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 continue;
             }
 
+            // Fix #11b: Block execute_ssh_write to SSH-sensitive paths
+            if (toolName === 'execute_ssh_write' && ('path' in toolArgs || 'file_path' in toolArgs)) {
+                const writeGuardReason = checkWriteTarget(toolArgs as any);
+                if (writeGuardReason) {
+                    console.warn(`[loop] SSH write path guard blocked: ${writeGuardReason}`);
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: toolCall.id,
+                        content: `BLOCKED: ${writeGuardReason}`,
+                    });
+                    continue;
+                }
+            }
+
             const toolApproval = getToolApprovalRequest(toolName, toolArgs);
             if (toolApproval) {
+                // ─── Fix 3: Pre-flight state snapshot ──────────────────────────
+                // Capture resource state now so resume.ts can detect drift later.
+                if (tool.getCurrentState) {
+                    try {
+                        const stateSnapshot = await tool.getCurrentState(toolArgs);
+                        const stateHash = createHash('sha256').update(stateSnapshot).digest('hex').slice(0, 16);
+                        // Embed in the command string so it survives serialisation
+                        toolApproval.command += `|__stateHash=${encodeURIComponent(stateHash)}`;
+                        console.log(`[loop] State hash captured for ${toolName}: ${stateHash}`);
+                    } catch (err) {
+                        console.warn(`[loop] getCurrentState failed for ${toolName}, skipping hash:`, err);
+                    }
+                }
+
                 // Ensure session exists in DB before creating approval (FK constraint)
                 await upsertSession({
                     id: message.sessionId,
@@ -1087,11 +1073,14 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
             let result: { success: boolean; output: string };
             let sanitizedOutput = '';
             const receiptHost = String(toolArgs.host ?? toolArgs.server_label ?? 'unknown');
-            if (toolName === 'fix_nginx_config' && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS, receiptHost)) {
+
+            // Fix #4: wire expectedOutputHash — the diagnose receipt must match the target file path
+            const expectedHash = String(toolArgs.file_path ?? '') ? hashOutput(String(toolArgs.file_path)) : undefined;
+            if (toolName === 'fix_nginx_config' && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS, receiptHost, expectedHash)) {
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    content: 'BLOCKED: Run diagnose_nginx first. The fix cannot proceed without a successful diagnosis receipt.',
+                    content: 'BLOCKED: Run diagnose_nginx first. The fix cannot proceed without a successful diagnosis receipt for this specific file path.',
                 });
                 continue;
             }
@@ -1104,13 +1093,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 });
                 continue;
             }
-            const SSH_TOOLS = new Set([
-                'execute_ssh_command', 'execute_ssh_write', 'diagnose_nginx',
-                'diagnose_services', 'diagnose_domain', 'fix_nginx_config',
-                'renew_ssl', 'manage_php', 'repair_mysql', 'cleanup_disk',
-                'fix_wordpress', 'create_nginx_vhost'
-            ]);
-            const sshCallCount = [...currentLegTools].filter(t => SSH_TOOLS.has(t)).length;
+
+            // Fix #4: SSH rate limiter — sum counts from Map (SSH_TOOLS hoisted to module scope)
+            const sshCallCount = [...currentLegCounts.entries()]
+                .filter(([t]) => SSH_TOOLS.has(t))
+                .reduce((sum, [, n]) => sum + n, 0);
             if (sshCallCount >= 30) {
                 messages.push({
                     role: 'tool',
@@ -1123,18 +1110,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 console.log(`[loop] ⚡ EXECUTING TOOL: ${toolName} on target: ${String(toolArgs.server_label ?? toolArgs.host ?? 'N/A')}`);
                 if (toolArgs.server_label === 'all') {
                     const servers = await resolveAllServers();
+                    // Fix #6: wrap each fanout promise in a 30s timeout
                     const fanoutResults = await Promise.all(
-                        servers.map(async (server) => {
-                            const output = await tool.execute({
+                        servers.map(server => withTimeout(
+                            tool.execute({
                                 ...toolArgs,
                                 server_label: server.label,
                                 host: server.ip,
-                            });
-                            return {
+                            }).then(output => ({
                                 success: output.success,
                                 output: `[${server.label}]\n${output.output}`,
-                            };
-                        })
+                            })),
+                            30_000,
+                            server.label
+                        ))
                     );
                     result = {
                         success: fanoutResults.every((entry) => entry.success),
@@ -1144,27 +1133,10 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                     result = await tool.execute(toolArgs);
                 }
 
-                // Save successful fix to memory (non-fatal, fire-and-forget)
-                const MEMORY_TOOLS = new Set([
-                    'fix_nginx_config',
-                    'fix_wordpress',
-                    'renew_ssl',
-                    'manage_php',
-                    'repair_mysql',
-                    'cleanup_disk',
-                    'execute_ssh_write',
-                    'cloudflare_cache_purge',
-                ]);
+                // ─── Phase 4: Record tool usage for SSH escalation analysis ──
+                recordToolUsage(toolName, message.sessionId, result.success);
 
-                const SENSITIVE_PATTERNS = [
-                    /private.*key/i,
-                    /ssh.*key/i,
-                    /password/i,
-                    /secret/i,
-                    /token/i,
-                    /\.env/i,
-                ];
-
+                // Save successful fix to memory (MEMORY_TOOLS/SENSITIVE_PATTERNS hoisted to module scope)
                 const isSensitive = SENSITIVE_PATTERNS.some(p =>
                     p.test(message.text ?? '') || p.test(JSON.stringify(toolArgs))
                 );
@@ -1193,6 +1165,18 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
             sanitizedOutput = sanitized.output;
             console.log(`[loop] ✅ TOOL COMPLETE: ${toolName} — success=${result.success}, output length: ${sanitized.output.length} chars`);
 
+            // For diagnose_nginx, if it successfully found a path, use its hash so fix_nginx_config can verify it
+            let receiptOutputOrHash = sanitizedOutput || result.output;
+            let isAlreadyHashed = false;
+
+            if (toolName === 'diagnose_nginx' && result.success) {
+                const fileMatch = (sanitizedOutput || result.output).match(/in\s+(\/etc\/nginx\/[^\s:]+)[:|\s]/i);
+                if (fileMatch?.[1]) {
+                    receiptOutputOrHash = hashOutput(fileMatch[1]);
+                    isAlreadyHashed = true;
+                }
+            }
+
             const receiptKey = toolName === 'repair_mysql'
                 ? `${toolName}:${mysqlAction}`
                 : toolName;
@@ -1201,36 +1185,203 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
                 receiptKey,
                 result.success,
                 receiptHost,
-                sanitizedOutput || result.output
+                receiptOutputOrHash,
+                isAlreadyHashed
             );
-            currentLegTools.add(toolName);
+            // Fix #4: increment tool count in Map
+            currentLegCounts.set(toolName, (currentLegCounts.get(toolName) ?? 0) + 1);
 
             const toolOutputForMessage = sanitizedOutput.length > 0
                 ? sanitizedOutput
                 : '[Tool returned empty output]';
+
+            // ─── Phase 1: Exact Fingerprint Loop Detection ────────────────────────
+            let identicalCount = 0;
+            const currentArgsStr = JSON.stringify(toolArgs);
+            for (let i = 0; i < messages.length; i++) {
+                const msg = messages[i] as any;
+                if (msg.role === 'tool' && msg.content === toolOutputForMessage && msg.tool_call_id) {
+                    // Walk backwards to find the parent assistant message with tool_calls
+                    for (let j = i - 1; j >= 0; j--) {
+                        const candidate = messages[j] as any;
+                        if (candidate.role === 'assistant' && candidate.tool_calls) {
+                            const callMatch = candidate.tool_calls.find((tc: any) => tc.id === msg.tool_call_id);
+                            if (callMatch?.function?.name === toolName && callMatch?.function?.arguments === currentArgsStr) {
+                                identicalCount++;
+                            }
+                            break; // stop searching once we find the parent
+                        }
+                        // If we hit a user message, the parent is missing — stop
+                        if (candidate.role === 'user') break;
+                    }
+                }
+            }
+
+            if (identicalCount >= 2) { 
+                 console.warn(`[loop] 🛑 LOOP GUARD BLOCKED: ${toolName} with identical args repeated 3 times.`);
+                 messages.push({
+                     role: 'tool',
+                     tool_call_id: toolCall.id,
+                     content: 'BLOCKED BY LOOP DETECTOR: You have executed this exact tool with these parameters 3 times and received the exact same output. Stop repeating this action. Summarize the failure and ask the human for help.'
+                 });
+                 continue; 
+            }
+
             messages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
                 content: toolOutputForMessage,
             });
 
-            // Auto-chain: if diagnose_nginx found a config file error,
-            // prompt the LLM (as a user turn) to call fix_nginx_config with the right file
-            if (toolName === 'diagnose_nginx' && result.success) {
-                const fileMatch = (sanitizedOutput || result.output).match(
-                    /in\s+(\/etc\/nginx\/[^\s:]+)[:|\s]/i
-                );
-                const foundFilePath = fileMatch?.[1];
-                if (foundFilePath) {
-                    console.log(`[loop] Auto-chain: diagnose found error in ${foundFilePath} — will call fix_nginx_config next`);
-                    pendingAutoChain = {
-                        name: 'fix_nginx_config',
-                        args: {
-                            file_path: foundFilePath,
-                            server_label: String(toolArgs.server_label ?? 'production'),
-                            host: String(toolArgs.host ?? '') // forward the host too if any
-                        }
+            // Fix #1: Auto-chain — route through HITL approval gate
+            if (toolName === 'diagnose_nginx' && result.success && isAlreadyHashed) {
+                // We know fileMatch succeeded. The expected hash for the fix will be the exact same.
+                const fileMatch = (sanitizedOutput || result.output).match(/in\s+(\/etc\/nginx\/[^\s:]+)[:|\s]/i);
+                const foundFilePath = fileMatch![1];
+
+                console.log(`[loop] Auto-chain: diagnose found error in ${foundFilePath} — requesting approval for fix_nginx_config`);
+                const fixTool = getToolByName('fix_nginx_config');
+                if (fixTool) {
+                    const fixArgs: Record<string, unknown> = {
+                        file_path: foundFilePath,
+                        server_label: String(toolArgs.server_label ?? 'production'),
+                        host: String(toolArgs.host ?? ''),
                     };
+                    const fixCallId = `call_autochain_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+                    // Check receipt pre-condition: diagnose_nginx must have succeeded on same host
+                    if (!hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS, receiptHost)) {
+                        console.warn('[loop] Auto-chain: diagnose_nginx receipt check failed despite just running — skipping');
+                    } else {
+                        // Route through the approval gate — fix_nginx_config is Tier-3
+                        const fixApproval = getToolApprovalRequest('fix_nginx_config', fixArgs);
+                        if (fixApproval) {
+                            // Inject a proper assistant tool_call so the message history stays valid
+                            messages.push({
+                                role: 'assistant',
+                                content: null,
+                                tool_calls: [{
+                                    id: fixCallId,
+                                    type: 'function' as const,
+                                    function: {
+                                        name: 'fix_nginx_config',
+                                        arguments: JSON.stringify(fixArgs),
+                                    },
+                                }],
+                            });
+
+                            // Create approval and pause
+                            await upsertSession({
+                                id: message.sessionId,
+                                channel: message.channel,
+                                user_id: message.userId,
+                                reply_target: message.replyTarget ?? session?.reply_target ?? null,
+                                messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+                                receipts: serializeReceipts(executionReceipts),
+                                iteration,
+                            });
+                            const saved = await createApproval({
+                                session_id: message.sessionId,
+                                command: fixApproval.command,
+                                target_host: fixApproval.targetHost,
+                                rationale: `Auto-detected nginx config error in ${foundFilePath}. ${fixApproval.rationale}`,
+                                tool_call_id: fixCallId,
+                            });
+
+                            await onApproval({
+                                approvalId: saved.id,
+                                command: fixApproval.command,
+                                targetHost: fixApproval.targetHost,
+                                rationale: `Auto-detected nginx config error in ${foundFilePath}. ${fixApproval.rationale}`,
+                            });
+
+                            messages.push({
+                                role: 'tool',
+                                tool_call_id: fixCallId,
+                                content: `Approval requested (ID: ${saved.id}). Auto-chain fix paused until user proceeds or rejects.`,
+                            });
+
+                            await onReply(
+                                `🔍 Found nginx config error in \`${foundFilePath}\`.\n\n`
+                                + '🔐 *Approval Required* to apply the fix.\n'
+                                + 'Please click *Proceed* or *Reject* on the card above.'
+                            );
+
+                            await indicator?.update('⏳ Awaiting your decision (Proceed/Reject)...');
+                            await indicator?.stop(true);
+
+                            // FIX BUG: Satisfy any remaining tool calls in this batch
+                            for (const remaining of choice.message.tool_calls) {
+                                if (remaining.id !== toolCall.id && !messages.some(m => m.role === 'tool' && 'tool_call_id' in m && m.tool_call_id === remaining.id)) {
+                                    messages.push({
+                                        role: 'tool',
+                                        tool_call_id: remaining.id,
+                                        content: `Cancelled: Execution paused because auto-chain 'fix_nginx_config' requires human approval.`,
+                                    });
+                                }
+                            }
+
+                            await upsertSession({
+                                id: message.sessionId,
+                                channel: message.channel,
+                                user_id: message.userId,
+                                reply_target: message.replyTarget ?? session?.reply_target ?? null,
+                                messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+                                receipts: serializeReceipts(executionReceipts),
+                                iteration,
+                            });
+                            return; // PAUSE — wait for HITL
+                        } else {
+                            // No approval required (shouldn't happen for Tier-3, but safety fallback)
+                            console.warn('[loop] Auto-chain: fix_nginx_config did not require approval — executing directly');
+
+                            // Audit Guard for direct execution
+                            if (intent.isAudit && getWriteTools().has('fix_nginx_config')) {
+                                messages.push({
+                                    role: 'tool',
+                                    tool_call_id: fixCallId,
+                                    content: `BLOCKED BY AUDIT GUARD: "fix_nginx_config" is a write operation. You are in read-only audit mode.`,
+                                });
+                                continue;
+                            }
+
+                            // Rate Limiter Guard for direct execution
+                            if (sshCallCount >= 30) {
+                                messages.push({
+                                    role: 'tool',
+                                    tool_call_id: fixCallId,
+                                    content: `BLOCKED: SSH rate limit reached for this session (30 tool executions).`,
+                                });
+                                continue;
+                            }
+
+                            const fixResult = await fixTool.execute(fixArgs);
+
+                            messages.push({
+                                role: 'assistant',
+                                content: null,
+                                tool_calls: [{
+                                    id: fixCallId,
+                                    type: 'function' as const,
+                                    function: {
+                                        name: 'fix_nginx_config',
+                                        arguments: JSON.stringify(fixArgs),
+                                    },
+                                }],
+                            });
+
+                            const fixSanitized = sanitizeToolOutput(fixResult.output);
+                            messages.push({
+                                role: 'tool',
+                                tool_call_id: fixCallId,
+                                content: fixSanitized.output,
+                            });
+
+                            recordReceipt(executionReceipts, 'fix_nginx_config', fixResult.success, receiptHost, fixSanitized.output);
+                            currentLegCounts.set('fix_nginx_config', (currentLegCounts.get('fix_nginx_config') ?? 0) + 1);
+                            console.log(`[loop] ✅ AUTO-CHAIN COMPLETE: fix_nginx_config — success=${fixResult.success}`);
+                        }
+                    }
                 }
             }
         }
@@ -1272,17 +1423,4 @@ ${priorToolLines || 'No prior tool outputs recorded.'}
     });
 
     // Note: HITL resume path is implemented in src/hitl/resume.ts.
-    // Remaining gaps are Layered Guards and intent classifier per v3.0 plan.
-}
-function stripEphemeralMessages(
-    msgs: OpenAI.ChatCompletionMessageParam[]
-): OpenAI.ChatCompletionMessageParam[] {
-    return msgs.filter((m: any) => {
-        if (m.role === 'user' && typeof m.content === 'string') {
-            return !m.content.startsWith('[AUTO-CHAIN]')
-                && !m.content.startsWith('[SYSTEM GUARD]')
-                && !m.content.startsWith('[SYSTEM]');
-        }
-        return true;
-    });
 }

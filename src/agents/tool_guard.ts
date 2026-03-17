@@ -1,3 +1,21 @@
+// ─── SSH Write Path Guard ──────────────────────────────────────────────────────
+const SSH_SENSITIVE_PATHS = ['.ssh/', 'authorized_keys', 'known_hosts', 'id_rsa', 'id_ed25519'];
+
+/**
+ * Pre-execution guard for execute_ssh_write.
+ * Blocks writes to SSH-sensitive paths (key files, authorized_keys, etc.).
+ * Returns null if safe, or a block reason string if unsafe.
+ */
+export function checkWriteTarget(toolArgs: Record<string, unknown>): string | null {
+    const targetPath = String(toolArgs.path ?? toolArgs.file_path ?? '');
+    if (SSH_SENSITIVE_PATHS.some(p => targetPath.includes(p))) {
+        return `Writing to SSH key path "${targetPath}" is blocked. Manage SSH keys directly on the server.`;
+    }
+    return null;
+}
+
+// ─── Tool Output Sanitization ──────────────────────────────────────────────────
+
 export function sanitizeToolOutput(output: string): { output: string; masked: boolean; injections: string[] } {
     let sanitized = output ?? '';
     let masked = false;

@@ -18,6 +18,12 @@ const EnvSchema = z.object({
     CLOUDFLARE_ZONE_ID: z.string().optional(),
     CLOUDFLARE_DOMAIN: z.string().optional(),
 
+    // Cloudstick API Config
+    CLOUDSTICK_API_BASE: z.string().url().default('https://api.cloudstick.io'),
+    CLOUDSTICK_API_KEY: z.string().optional(),
+    CLOUDSTICK_API_SECRET: z.string().optional(),
+    CLOUDSTICK_USER_ID: z.string().optional(),
+
     // Sentinel
     PILOT_CHAT_ID: z.string().optional(),
 

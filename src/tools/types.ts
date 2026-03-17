@@ -18,6 +18,11 @@ export interface Tool {
     approvalTier?: number;
     /** Optional human-readable approval rationale for HITL cards */
     getRationale?: (args: Record<string, unknown>) => string;
+    /** Optional: build the full approval request from args. Used by getToolApprovalRequest() in loop.ts. */
+    getApprovalRequest?: (args: Record<string, unknown>) => { command: string; targetHost: string; rationale: string } | null;
+    /** Optional: return a string snapshot of the current resource state.
+     *  Used by the HITL flow to detect state drift between approval request and execution. */
+    getCurrentState?: (args: Record<string, unknown>) => Promise<string>;
     /** Execute the tool and return a result */
     execute(args: Record<string, unknown>): Promise<ToolResult>;
 }

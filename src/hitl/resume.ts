@@ -148,6 +148,37 @@ export async function resumeApprovedSession(
         return;
     }
 
+    // ─── Fix 3: Pre-flight state re-validation ──────────────────────────
+    // Step 1: Token refresh (Removed: API Keys do not require refreshing)
+
+    // Step 2 & 3: State hash comparison (if tool supports getCurrentState)
+    const savedHash = toolArgs.__stateHash as string | undefined;
+    // Remove the internal hash from args before passing to the tool
+    delete toolArgs.__stateHash;
+
+    if (savedHash && tool.getCurrentState) {
+        try {
+            const currentState = await tool.getCurrentState(toolArgs);
+            const currentHash = createHash('sha256').update(currentState).digest('hex').slice(0, 16);
+            console.log(`[resume] State hash comparison: saved=${savedHash} current=${currentHash}`);
+
+            if (currentHash !== savedHash) {
+                console.warn(`[resume] ⚠️ State drift detected for ${toolName}! saved=${savedHash} current=${currentHash}`);
+                await onReply(
+                    '⚠️ **Execution Aborted — State Drift Detected**\n\n'
+                    + 'The server state has changed since this approval was requested. '
+                    + 'This can happen if someone made manual changes, background scripts ran, '
+                    + 'or another process modified the resource.\n\n'
+                    + 'Execution aborted to prevent conflicts. Please request the action again.'
+                );
+                return;
+            }
+            console.log(`[resume] State hash matches — safe to proceed.`);
+        } catch (err) {
+            console.warn('[resume] getCurrentState re-check failed, proceeding cautiously:', err);
+        }
+    }
+
     // 6. Execute the tool NOW
     await onReply(`⚙️ Proceeding — executing ${toolName} on \`${String(toolArgs.server_label ?? toolArgs.host ?? 'server')}\`...`);
 

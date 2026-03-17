@@ -23,6 +23,13 @@ import { cleanupDiskTool } from './cleanup_disk.js';
 import { executeSshWriteTool } from './execute_ssh_write.js';
 import { diagnoseDomainTool } from './diagnose_domain.js';
 import { cloudflareCachePurgeTool } from './cloudflare_cache_purge.js';
+import { createSystemUserTool, deleteSystemUserTool, changeSystemUserPasswordTool } from './manage_system_users.js';
+import { createDatabaseUserTool, deleteDatabaseUserTool, changeDatabaseUserPasswordTool } from './manage_database_users.js';
+import { issueSSLTool, renewSSLApiTool, deleteSSLTool, updateSSLSettingsTool } from './ssl_api_tools.js';
+import { createDatabaseTool, deleteDatabaseTool } from './manage_databases.js';
+import { switchPhpApiTool } from './switch_php_api.js';
+import { emergencyRestartTool } from './emergency_restart.js';
+import { listCronJobsTool, createCronJobTool, deleteCronJobTool } from './manage_cron_jobs.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -43,6 +50,26 @@ const ALL_TOOLS: Tool[] = [
     managePhpTool,
     repairMysqlTool,
     cleanupDiskTool,
+    // Phase 2.5: System & DB User Management (Tier 3)
+    createSystemUserTool,
+    deleteSystemUserTool,
+    changeSystemUserPasswordTool,
+    createDatabaseUserTool,
+    deleteDatabaseUserTool,
+    changeDatabaseUserPasswordTool,
+    // Phase 3: Full API Surface (Tier 3)
+    issueSSLTool,
+    renewSSLApiTool,
+    deleteSSLTool,
+    updateSSLSettingsTool,
+    createDatabaseTool,
+    deleteDatabaseTool,
+    switchPhpApiTool,
+    emergencyRestartTool,
+    // Phase 4: Cron Job Management
+    listCronJobsTool,
+    createCronJobTool,
+    deleteCronJobTool,
 ];
 
 /** Map for O(1) lookup by name */

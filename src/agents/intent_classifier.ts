@@ -8,6 +8,7 @@ export interface Intent {
     domains: string[];
     isApprovalResponse: boolean;
     needsClarification: boolean;
+    requiresServerClarification: boolean;
     confidence: number;
 }
 
@@ -51,6 +52,7 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
         domains: [],
         isApprovalResponse: false,
         needsClarification: false,
+        requiresServerClarification: false,
         confidence: 0
     };
 
@@ -70,8 +72,15 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
             response_format: { type: 'json_object' }
         });
 
-        const content = response.choices[0]?.message?.content?.trim();
-        if (content) {
+        const rawContent = response.choices[0]?.message?.content?.trim();
+        if (rawContent) {
+            // Robustly extract JSON object by finding the first { and last }
+            let content = rawContent;
+            const match = content.match(/\{[\s\S]*\}/);
+            if (match) {
+                content = match[0];
+            }
+
             const parsed = JSON.parse(content) as Intent;
 
             // Hardcoded Audit Override
