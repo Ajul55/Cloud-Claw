@@ -2,7 +2,7 @@ import { getLLMClient } from '../llm/provider.js';
 
 export interface Intent {
     requiresTool: boolean;
-    toolHint: 'diagnose_nginx' | 'diagnose_domain' | 'cloudflare_cache_purge' | 'diagnose_services' | 'execute_ssh_command' | 'none';
+    toolHint: 'diagnose_nginx' | 'diagnose_domain' | 'cloudflare_cache_purge' | 'diagnose_services' | 'execute_ssh_command' | 'check_cloudstick_connection' | 'none';
     isAudit: boolean;
     targetServer: 'production' | 'test' | 'all' | 'unknown';
     domains: string[];
@@ -22,7 +22,7 @@ Analyze the user's message and return a strictly typed JSON object matching this
 
 {
   "requiresTool": boolean, // Does this request need server read/write action to fulfill? (True for fixes, diagnostics. False for general concepts)
-  "toolHint": "diagnose_nginx" | "diagnose_domain" | "cloudflare_cache_purge" | "diagnose_services" | "execute_ssh_command" | "none", // Best tool to start with
+  "toolHint": "diagnose_nginx" | "diagnose_domain" | "cloudflare_cache_purge" | "diagnose_services" | "execute_ssh_command" | "check_cloudstick_connection" | "none", // Best tool to start with
   "isAudit": boolean, // Is the user just asking for a status check/audit without making changes?
   "targetServer": "production" | "test" | "all" | "unknown", // Did they specify a server?
   "domains": string[], // List of real hostnames mentioned (e.g. "example.com"). NO IP addresses, NO version strings (e.g. "v2.0"), NO file extensions masquerading as domains (e.g. ".ts", ".js", ".conf").
@@ -34,6 +34,9 @@ Analyze the user's message and return a strictly typed JSON object matching this
 Examples:
 User: "my website example.com is down, check it"
 Output: {"requiresTool":true,"toolHint":"diagnose_domain","isAudit":false,"targetServer":"unknown","domains":["example.com"],"isApprovalResponse":false,"needsClarification":false,"confidence":0.9}
+
+User: "is cloudstick connected?"
+Output: {"requiresTool":true,"toolHint":"check_cloudstick_connection","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
 
 User: "fix nginx on test"
 Output: {"requiresTool":true,"toolHint":"diagnose_nginx","isAudit":false,"targetServer":"test","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}

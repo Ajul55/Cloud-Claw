@@ -30,6 +30,7 @@ import { createDatabaseTool, deleteDatabaseTool } from './manage_databases.js';
 import { switchPhpApiTool } from './switch_php_api.js';
 import { emergencyRestartTool } from './emergency_restart.js';
 import { listCronJobsTool, createCronJobTool, deleteCronJobTool } from './manage_cron_jobs.js';
+import { checkCloudstickConnectionTool } from './check_cloudstick_connection.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -70,6 +71,7 @@ const ALL_TOOLS: Tool[] = [
     listCronJobsTool,
     createCronJobTool,
     deleteCronJobTool,
+    checkCloudstickConnectionTool,
 ];
 
 /** Map for O(1) lookup by name */

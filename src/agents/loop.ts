@@ -35,7 +35,7 @@ import { getLLMToolDefinitions, getToolByName, getAllTools } from '../tools/tool
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 import { recordToolUsage } from '../telemetry/ssh_escalation_analyzer.js';
 import { checkCommand, requiresApproval, isWriteCommand } from '../security/command_filter.js';
-import { classifyIntent } from './intent_classifier.js';
+import { classifyIntent, type Intent } from './intent_classifier.js';
 import { checkForHallucination } from './hallucination_guard.js';
 import { sanitizeToolOutput, checkWriteTarget } from './tool_guard.js';
 import { SYSTEM_PROMPT } from '../config/system_prompt.js';
@@ -262,6 +262,22 @@ function toolSupportsServerRouting(tool: { parameters: { properties: Record<stri
         || Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'host');
 }
 
+export function intentRequiresServerTarget(intent: Pick<Intent, 'requiresTool' | 'toolHint'>): boolean {
+    if (!intent.requiresTool) {
+        return false;
+    }
+
+    const hintedTool = intent.toolHint !== 'none'
+        ? getToolByName(intent.toolHint)
+        : null;
+
+    if (!hintedTool) {
+        return true;
+    }
+
+    return toolSupportsServerRouting(hintedTool);
+}
+
 // ─── Fix #7: Simplified getToolApprovalRequest — registry lookup with fallback
 function getToolApprovalRequest(
     toolName: string,
@@ -468,6 +484,7 @@ export async function runAgentLoop(
 
     const intent = await classifyIntent(message.text ?? '');
     const requiresTool = intent.requiresTool;
+    const requiresCloudstickConnection = intent.toolHint === 'check_cloudstick_connection';
     const requiresCloudflarePurge = intent.toolHint === 'cloudflare_cache_purge';
     const requiresDomainDiagnosis = intent.toolHint === 'diagnose_domain';
     const requiresNginx = intent.toolHint === 'diagnose_nginx';
@@ -497,7 +514,8 @@ export async function runAgentLoop(
 
     // ─── Fix #12: Server disambiguation for generic prompts ────────────────
     // Placed AFTER session sanitization so persisted messages are clean.
-    const isGenericWithoutServer = requiresTool && (!intent.targetServer || intent.targetServer === 'unknown');
+    const isGenericWithoutServer = intentRequiresServerTarget(intent)
+        && (!intent.targetServer || intent.targetServer === 'unknown');
     if (intent.requiresServerClarification || isGenericWithoutServer) {
         const allServers = await getAllServers();
         if (allServers.length > 1 && isGenericWithoutServer) {
@@ -598,6 +616,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         if (shouldPauseForClarification && iteration === 1) {
             toolChoice = 'none';
             console.log('[loop] Forcing tool_choice: none (long conversation clarification gate)');
+        } else if (requiresCloudstickConnection && iteration === 1 && !hasReceipt(executionReceipts, 'check_cloudstick_connection', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'check_cloudstick_connection' } }
+                : 'auto';
+            console.log('[loop] Forcing tool_choice: check_cloudstick_connection (explicit Cloudstick connectivity check detected)');
         } else if (requiresCloudflarePurge && iteration === 1 && !hasReceipt(executionReceipts, 'cloudflare_cache_purge', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'cloudflare_cache_purge' } }
@@ -623,19 +646,18 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         const { client: openai, model: activeModel } = getLLMClient();
         let reqLatency = 0;
 
-        // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain,
-        // which guarantees we never hit the 2013 "tool id not found" provider error.
-        const validToolIds = new Set<string>();
+        // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain.
+        // First pass cleans the global `messages` array of any pre-existing orphan corruption.
+        const globalValidToolIds = new Set<string>();
         messages = messages.filter((msg: any) => {
             if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
-                // Register valid IDs
                 msg.tool_calls.forEach((tc: any) => {
-                    if (tc.id) validToolIds.add(tc.id);
+                    if (tc.id) globalValidToolIds.add(tc.id);
                 });
             } else if (msg.role === 'tool') {
-                if (!msg.tool_call_id || !validToolIds.has(msg.tool_call_id)) {
-                    console.warn(`[loop] Dropping orphaned tool message with ID ${msg.tool_call_id}`);
-                    return false; // Safely strip this from the request
+                if (!msg.tool_call_id || !globalValidToolIds.has(msg.tool_call_id)) {
+                    console.warn(`[loop] Dropping globally orphaned tool message with ID ${msg.tool_call_id}`);
+                    return false;
                 }
             }
             return true;
@@ -645,9 +667,26 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             // Trim session to last 20 messages before each LLM call (Fix for BUG-10)
             // Always keep the first message (original request context)
             const MAX_HISTORY = 20;
-            const trimmedMessages = messages.length > MAX_HISTORY
+            let trimmedMessages = messages.length > MAX_HISTORY
                 ? [messages[0], ...messages.slice(-MAX_HISTORY + 1)]
                 : messages;
+
+            // Second pass cleans any orphans created BY the trim slice itself, which
+            // guarantees we never hit the 2013 "tool id not found" provider error.
+            const trimmedValidToolIds = new Set<string>();
+            trimmedMessages = trimmedMessages.filter((msg: any) => {
+                if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+                    msg.tool_calls.forEach((tc: any) => {
+                        if (tc.id) trimmedValidToolIds.add(tc.id);
+                    });
+                } else if (msg.role === 'tool') {
+                    if (!msg.tool_call_id || !trimmedValidToolIds.has(msg.tool_call_id)) {
+                        console.warn(`[loop] Dropping orphaned tool message from trimmed window with ID ${msg.tool_call_id}`);
+                        return false; 
+                    }
+                }
+                return true;
+            });
 
             console.log(`[loop] Outgoing messages to API (trimmed from ${messages.length} to ${trimmedMessages.length})`);
             
@@ -1039,6 +1078,14 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         tool_call_id: toolCall.id,
                         content: `Approval requested (ID: ${saved.id}). Command execution is paused until the user approves or rejects.`,
                     });
+
+                    await onReply(
+                        '🔐 *Approval Required*\n\n'
+                        + `Target: \`${targetHost}\`\n`
+                        + `${approvalReason}\n`
+                        + 'Please click *Proceed* or *Reject* on the card above.\n'
+                        + '_If no card appeared, the approval system has an error — check the server logs._'
+                    );
 
                     await indicator?.update("⏳ Awaiting Pilot approval...");
                     await indicator?.stop(true);

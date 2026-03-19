@@ -80,6 +80,14 @@ export function createSlackApp(): SlackAppInstance {
                 console.log('[slack] Approval card sent — ts:', result.ts);
             } catch (err) {
                 console.error('[slack] FAILED to send approval card:', err);
+                await client.chat.postMessage({
+                    channel,
+                    text:
+                        '🔐 Approval required. The interactive card failed to render.\n'
+                        + `Target: ${context.targetHost}\n`
+                        + `Reason: ${context.rationale}\n`
+                        + `Reply with \`proceed\` or \`reject\`. Approval ID: ${context.approvalId}`,
+                });
             }
         };
 
@@ -181,10 +189,10 @@ export function createSlackApp(): SlackAppInstance {
             approvalId,
             true,
             userId,
-            async (text) => { void client.chat.postMessage({ channel: channelId, text }); },
+            async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
             async (context) => {
                 const { slackBlocks } = buildApprovalMessage(context);
-                void client.chat.postMessage({ channel: channelId, text: 'Approval Required', blocks: slackBlocks });
+                await client.chat.postMessage({ channel: channelId, text: 'Approval Required', blocks: slackBlocks });
             }
         );
     });
@@ -214,7 +222,7 @@ export function createSlackApp(): SlackAppInstance {
             approvalId,
             false,
             userId,
-            async (text) => { void client.chat.postMessage({ channel: channelId, text }); },
+            async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
             async () => { },
             reason,
         );

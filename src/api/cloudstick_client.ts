@@ -12,7 +12,7 @@ export class CloudstickApiClient {
         }
         
         this.client = axios.create({
-            baseURL: `${env.CLOUDSTICK_API_BASE}/api/v1`,
+            baseURL: `${env.CLOUDSTICK_API_BASE}/api/v2`,
             headers: {
                 'App-Type': 'application/json',
                 'Content-Type': 'application/json'
@@ -190,12 +190,33 @@ export class CloudstickApiClient {
     }
 
     // > Plans
+    public async createPlan(userId: string, data: { plan_id: number; name: string; description: string; monthly_price: number; yearly_price: number; backup_storage_value: number; backup_storage_unit: string; features?: any }) {
+        return this.request({ method: 'POST', url: `/cloudstickplans/users/${userId}`, data });
+    }
+
     public async listPlans(userId: string) {
         return this.request({ method: 'GET', url: `/listcloudstickplans/users/${userId}` });
     }
 
     public async getPlan(planId: string) {
         return this.request({ method: 'GET', url: `/cloudstickplan/${planId}` });
+    }
+
+    public async updatePlan(planId: string, userId: string, data: { features: string[] }) {
+        return this.request({ method: 'PATCH', url: `/cloudstickplan/${planId}/users/${userId}`, data });
+    }
+
+    public async deletePlan(planId: string, data?: { changed_plan_id: string }) {
+        // Based on Insomnia DELETE /api/v2/cloudstickplan/6 which accepts query params like ?changed_plan_id=1
+        let url = `/cloudstickplan/${planId}`;
+        if (data && data.changed_plan_id) {
+            url += `?changed_plan_id=${data.changed_plan_id}`;
+        }
+        return this.request({ method: 'DELETE', url });
+    }
+
+    public async addPlanFeature(planId: string, userId: string, data: { features: string[] }) {
+        return this.request({ method: 'POST', url: `/cloudstickplan/${planId}/feature/users/${userId}`, data });
     }
 
     // ─── PHASE 2: Safe Write Endpoints ────────────────────────────────────────
@@ -248,7 +269,7 @@ export class CloudstickApiClient {
     }
 
     public async deleteSystemUser(sysUserId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/systemusers/${sysUserId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'DELETE', url: `/systemuser/${sysUserId}/servers/${serverId}/users/${userId}` });
     }
 
     public async listSystemUsers(serverId: string, userId: string) {
