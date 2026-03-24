@@ -32,7 +32,7 @@ import { env } from '../config/env.js';
 import { getLLMClient } from '../llm/provider.js';
 import { getSession, upsertSession, createApproval, getLatestPendingApproval } from '../database/db.js';
 import { getLLMToolDefinitions, getToolByName, getAllTools } from '../tools/tool_registry.js';
-import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
+import { encodeToolApprovalCommand, isInternalApprovalArg, isSensitiveApprovalArg } from '../hitl/tool_approval.js';
 import { recordToolUsage } from '../telemetry/ssh_escalation_analyzer.js';
 import { checkCommand, requiresApproval, isWriteCommand } from '../security/command_filter.js';
 import { classifyIntent, type Intent } from './intent_classifier.js';
@@ -51,6 +51,8 @@ import {
     resolveAllServers,
     resolveServerFromMessage,
 } from '../utils/server_registry.js';
+import { setCloudstickUser } from '../api/cloudstick_context.js';
+import { getUserByPlatformId, hasCloudstickCredentials } from '../services/user_service.js';
 import type {
     IncomingMessage,
     ReplyFn,
@@ -239,11 +241,13 @@ export function hasReceipt(
 // ─── Fix #9: encodeApprovalArgs — no double-encoding ─────────────────────────
 function encodeApprovalArgs(toolArgs: Record<string, unknown>): Record<string, string> {
     return Object.fromEntries(
-        Object.entries(toolArgs).map(([key, value]) => {
-            if (typeof value === 'string') return [key, value]; // already a string, never re-encode
-            if (Array.isArray(value) || (value && typeof value === 'object')) return [key, JSON.stringify(value)];
-            return [key, String(value ?? '')];
-        })
+        Object.entries(toolArgs)
+            .filter(([key]) => !isInternalApprovalArg(key) && !isSensitiveApprovalArg(key))
+            .map(([key, value]) => {
+                if (typeof value === 'string') return [key, value]; // already a string, never re-encode
+                if (Array.isArray(value) || (value && typeof value === 'object')) return [key, JSON.stringify(value)];
+                return [key, String(value ?? '')];
+            })
     );
 }
 
@@ -372,6 +376,19 @@ export async function runAgentLoop(
 ): Promise<void> {
     // 1. Load or create session
     const session = await getSession(message.sessionId);
+
+    // 1b. Multi-tenant: set per-user Cloudstick credentials for this request
+    try {
+        const user = await getUserByPlatformId(message.channel, message.userId);
+        if (user && hasCloudstickCredentials(user)) {
+            setCloudstickUser(user);
+        } else {
+            setCloudstickUser(null);
+        }
+    } catch (err) {
+        console.warn('[loop] User credential lookup failed (non-fatal):', err);
+        setCloudstickUser(null);
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let messages: OpenAI.ChatCompletionMessageParam[] = (session?.messages ?? []) as any;
 
@@ -586,6 +603,25 @@ Recent tool attempts:
 ${priorToolLines || 'No prior tool outputs recorded.'}`
         : undefined;
 
+    let cloudstickServersStr: string | undefined = undefined;
+    const { getCloudstickUser } = await import('../api/cloudstick_context.js');
+    const effectiveUserId = getCloudstickUser()?.cloudstick_user_id ?? env.CLOUDSTICK_USER_ID;
+    
+    if (effectiveUserId) {
+        try {
+            const { getCloudstickClient } = await import('../api/cloudstick_client.js');
+            const client = getCloudstickClient();
+            const response = await client.listServersByUser(effectiveUserId);
+            if (response?.message?.servers?.length) {
+                cloudstickServersStr = response.message.servers
+                    .map((s: any) => `  - ${s.name} → ${s.ip4} (ID: ${s.id})`)
+                    .join('\n');
+            }
+        } catch (err) {
+            console.warn('[loop] Failed to fetch live Cloudstick servers for system prompt:', err instanceof Error ? err.message : String(err));
+        }
+    }
+
     while (iteration < MAX_ITERATIONS) {
         iteration++;
         console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
@@ -596,6 +632,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             sshUser: 'root',
             pastFixes: pastFixesStr || undefined,
             clarificationBlock,
+            cloudstickServers: cloudstickServersStr,
         });
 
         // Fix #8: rebuild nginx hint per-iteration so it only appears when no tools have run
@@ -853,7 +890,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             messages.push({
                                 role: 'tool',
                                 tool_call_id: toolCall.id,
-                                content: `Error: Server "${explicitLabel}" not found. Available servers: production (139.84.130.63) and test (65.20.82.177).`,
+                                content: `Error: Server "${explicitLabel}" not found. Please review the REGISTERED SERVERS list in the system prompt.`,
                             });
                             continue;
                         }
@@ -912,7 +949,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    content: 'Error: Write operations must target a single server. Choose either production (139.84.130.63) or test (65.20.82.177).',
+                    content: 'Error: Write operations must target a single registered server.',
                 });
                 continue;
             }
@@ -1470,4 +1507,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
     });
 
     // Note: HITL resume path is implemented in src/hitl/resume.ts.
+
+    // 6. Clear per-user context
+    setCloudstickUser(null);
 }

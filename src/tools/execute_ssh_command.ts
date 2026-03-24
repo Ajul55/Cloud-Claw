@@ -23,8 +23,7 @@ export const executeSshCommandTool: Tool = {
         properties: {
             server_label: {
                 type: 'string',
-                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
-                enum: ['production', 'test'],
+                description: 'Target server label or ID (e.g. "production", "test", or "191"). Must exactly match a server registered in the Cloudstick API list.',
             },
             host: {
                 type: 'string',

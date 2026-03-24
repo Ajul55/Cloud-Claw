@@ -8,11 +8,14 @@
 
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { checkSystemUserExists } from '../api/idempotency_guard.js';
 import { env } from '../config/env.js';
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
-const userId = () => env.CLOUDSTICK_USER_ID ?? '';
+const userId = () => getCloudstickUser()?.cloudstick_user_id
+    ?? env.CLOUDSTICK_USER_ID
+    ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
 // ─── Create System User ──────────────────────────────────────────────────────
 
@@ -61,7 +64,7 @@ export const createSystemUserTool: Tool = {
 
         try {
             const client = getCloudstickClient();
-            const result = await client.createSystemUser(serverId, userId(), { username, password });
+            const result = await client.createSystemUser(serverId, userId(), { name: username, password });
             return { success: true, output: `System user "${username}" created successfully.\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to create system user: ${err instanceof Error ? err.message : String(err)}` };
@@ -87,6 +90,16 @@ export const deleteSystemUserTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will permanently delete system user "${args.username ?? args.sys_user_id}" from server ${args.server_label ?? args.server_id}. All files owned by this user may become inaccessible.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('delete_system_user', {
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+            sys_user_id: String(args.sys_user_id),
+            username: String(args.username ?? ''),
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: `Permanently delete system user "${args.username ?? args.sys_user_id}". All files owned by this user may become inaccessible.`,
+    }),
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
@@ -126,12 +139,23 @@ export const changeSystemUserPasswordTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will change the password for system user "${args.username ?? args.sys_user_id}" on server ${args.server_label ?? args.server_id}.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('change_system_user_password', {
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+            sys_user_id: String(args.sys_user_id),
+            username: String(args.username ?? ''),
+            // password excluded — stored in session tool call args for resume
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: `Change password for system user "${args.username ?? args.sys_user_id}".`,
+    }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
             const result = await client.updateSystemUser(
                 String(args.sys_user_id), String(args.server_id), userId(),
-                { password: String(args.password) }
+                { password: String(args.password), confirm_password: String(args.password) }
             );
             return { success: true, output: `Password changed successfully.\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {

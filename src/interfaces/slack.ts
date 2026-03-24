@@ -24,8 +24,8 @@ let slackAppRef: SlackAppInstance | null = null;
 
 export function createSlackApp(): SlackAppInstance {
     const app = new App({
-        token: env.SLACK_BOT_TOKEN,
-        appToken: env.SLACK_APP_TOKEN,
+        token: env.SLACK_BOT_TOKEN!,
+        appToken: env.SLACK_APP_TOKEN!,
         socketMode: true,
         // Using @slack/bolt >= v4 to prevent crashes on 'too_many_websockets' errors
         logLevel: LogLevel.ERROR,
@@ -51,8 +51,7 @@ export function createSlackApp(): SlackAppInstance {
         // Identity whitelist — relaxed temporarily since the .env contains a channel ID
         if (env.SLACK_USER_ID && env.SLACK_USER_ID.startsWith('U') && user !== env.SLACK_USER_ID) {
             console.warn(`[Slack] Ignored message from unauthorized user: ${user}`);
-            // Temporarily ignoring strictly to allow testing, uncomment to enforce
-            // return;
+            return;
         }
 
         const sessionId = `slack:${user}`;
@@ -92,7 +91,7 @@ export function createSlackApp(): SlackAppInstance {
         };
 
         try {
-            const isCommand = await handleSlashCommand(cleanText, user, onReply);
+            const isCommand = await handleSlashCommand(cleanText, 'slack', user, onReply);
             if (isCommand) return;
 
             const indicator = new StatusIndicator('slack', channel, client, user);
@@ -134,7 +133,7 @@ export function createSlackApp(): SlackAppInstance {
             if (file.mimetype?.startsWith('audio/')) {
                 try {
                     const response = await fetch(file.url_private_download, {
-                        headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` }
+                        headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN!}` }
                     });
                     const arrayBuffer = await response.arrayBuffer();
                     const buffer = Buffer.from(arrayBuffer);

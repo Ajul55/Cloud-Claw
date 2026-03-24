@@ -20,8 +20,7 @@ export const fixNginxConfigTool: Tool = {
         properties: {
             server_label: {
                 type: 'string',
-                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
-                enum: ['production', 'test'],
+                description: 'Target server label or ID. Must match an active server.',
             },
             host: {
                 type: 'string',

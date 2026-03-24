@@ -8,11 +8,14 @@
 
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { checkDatabaseUserExists } from '../api/idempotency_guard.js';
 import { env } from '../config/env.js';
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
-const userId = () => env.CLOUDSTICK_USER_ID ?? '';
+const userId = () => getCloudstickUser()?.cloudstick_user_id
+    ?? env.CLOUDSTICK_USER_ID
+    ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
 // ─── Create Database User ────────────────────────────────────────────────────
 
@@ -93,6 +96,17 @@ export const deleteDatabaseUserTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will permanently delete database user "${args.username ?? args.db_user_id}" from server ${args.server_label ?? args.server_id}. Applications using this user will lose database access.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('delete_database_user', {
+            db_user_id: String(args.db_user_id),
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+            username: String(args.username ?? ''),
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: `Permanently delete database user "${args.username ?? args.db_user_id}". Applications using this user will lose database access.`,
+    }),
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
@@ -135,6 +149,18 @@ export const changeDatabaseUserPasswordTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will change the password for database user "${args.username ?? args.db_user_id}" on server ${args.server_label ?? args.server_id}. Applications using the old password will stop connecting.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('change_database_user_password', {
+            db_user_id: String(args.db_user_id),
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+            username: String(args.username ?? ''),
+            // password excluded — stored in session tool call args for resume
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: `Change password for database user "${args.username ?? args.db_user_id}".`,
+    }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();

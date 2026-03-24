@@ -1,42 +1,60 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { env } from '../config/env.js';
+import { getCloudstickUser } from './cloudstick_context.js';
+
+export interface CloudstickClientOptions {
+    apiKey?: string;
+    apiSecret?: string;
+    baseURL?: string;
+}
 
 export class CloudstickApiClient {
     private client: AxiosInstance;
-    private jwtToken: string | null = null;
-    private tokenExpiryMs: number = 0;
+    private apiKey: string;
+    private apiSecret: string;
 
-    constructor() {
-        if (!env.CLOUDSTICK_API_BASE) {
-            throw new Error('CLOUDSTICK_API_BASE is required');
-        }
-        
+    /**
+     * @param options.apiKey     - Cloudstick API key (falls back to env)
+     * @param options.apiSecret  - Cloudstick API secret (falls back to env)
+     * @param options.baseURL    - API base URL (falls back to env CLOUDSTICK_API_BASE)
+     */
+    constructor(options: CloudstickClientOptions = {}) {
+        const baseURL = options.baseURL ?? env.CLOUDSTICK_API_BASE ?? 'https://api.cloudstick.io';
+        this.apiKey = options.apiKey ?? env.CLOUDSTICK_API_KEY ?? '';
+        this.apiSecret = options.apiSecret ?? env.CLOUDSTICK_API_SECRET ?? '';
+
         this.client = axios.create({
-            baseURL: `${env.CLOUDSTICK_API_BASE}/api/v2`,
+            baseURL: `${baseURL}/api/v2`,
             headers: {
-                'App-Type': 'application/json',
                 'Content-Type': 'application/json'
             }
         });
     }
 
     /**
-     * Core request wrapper using API Key + Secret authentication
+     * Core request wrapper using API Key + Secret authentication.
+     * Uses instance-level credentials (from constructor or env fallback).
      */
     public async request<T = any>(config: AxiosRequestConfig): Promise<T> {
-        if (!env.CLOUDSTICK_API_KEY || !env.CLOUDSTICK_API_SECRET) {
-            throw new Error('Cloudstick API_KEY and API_SECRET are required in .env');
+        // Per-user context takes priority; fall back to instance credentials (env)
+        const ctx = getCloudstickUser();
+        const effectiveKey = ctx?.cloudstick_api_key ?? this.apiKey;
+        const effectiveSecret = ctx?.cloudstick_api_secret ?? this.apiSecret;
+
+        if (!effectiveKey || !effectiveSecret) {
+            throw new Error('Cloudstick API_KEY and API_SECRET are required (set in .env or per-user via /setup)');
         }
+
+        const authHeader = `Basic ${Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64')}`;
 
         try {
             const response: AxiosResponse<T> = await this.client.request({
                 ...config,
                 headers: {
                     ...config.headers,
-                    // Cloudstick standard header names for Key and Secret
-                    // Update these if Cloudstick requires different header names
-                    'Authorization': `Bearer ${env.CLOUDSTICK_API_KEY}`,
-                    'X-Api-Secret': env.CLOUDSTICK_API_SECRET,
+                    'APIKey': effectiveKey,
+                    'APISecret': effectiveSecret,
+                    'Authorization': authHeader,
                 }
             });
             return response.data;
@@ -49,147 +67,168 @@ export class CloudstickApiClient {
         }
     }
 
-    // ─── GET / LIST Endpoints (Phase 1) ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 1. Server Discovery & Actions
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    // > Servers
-    public async listServers(userId: string) {
-        return this.request({ method: 'GET', url: `/serverslist/users/${userId}` });
-    }
-    
+    /** List all servers for a user */
     public async listServersByUser(userId: string) {
         return this.request({ method: 'GET', url: `/serverslist/byuser/users/${userId}` });
     }
 
-    public async getServerDetails(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/servers/${serverId}/users/${userId}` });
+    /** Reboot a server */
+    public async rebootServer(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/reboot/servers/${serverId}/users/${userId}` });
     }
 
-    public async getServerActivity(serverId: string, userId: string, duration = '1Week', page = 1) {
-        return this.request({ method: 'GET', url: `/activity/servers/${serverId}/users/${userId}?duration=${duration}&page=${page}` });
+    /** Change PHP version at website level */
+    public async changePhpVersion(websiteId: string, serverId: string, userId: string, phpVersion: string) {
+        return this.request({
+            method: 'PATCH',
+            url: `/changephp/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data: { php_version: phpVersion }
+        });
     }
 
-    public async getActivityFilterTypes(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/list-activity/filter/servers/${serverId}/users/${userId}` });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 2. Database Provisioning (App Databases)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Create database & initial user */
+    public async createDatabaseWithUser(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: {
+            database: { db_name: string; db_collation?: string };
+            db_user: { db_user_name: string; password: string; privileges: string[] };
+        }
+    ) {
+        return this.request({
+            method: 'POST',
+            url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    // > Websites
-    public async listWebsites(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/list/websites/servers/${serverId}/users/${userId}` });
+    /** Assign existing user to database */
+    public async assignUserToDatabase(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { database_id: number; db_user_id: number; privileges: string[] }
+    ) {
+        return this.request({
+            method: 'POST',
+            url: `/appdatabase/assignusers/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    public async listSubdomains(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/list/website-subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3. WordPress Lifecycle Management
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Create WordPress admin/user */
+    public async createWpUser(
+        managerId: string,
+        serverId: string,
+        userId: string,
+        data: { user_name: string; email: string; role: string; password: string }
+    ) {
+        return this.request({
+            method: 'POST',
+            url: `/wordpress/wpusers/${managerId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    public async getSubdomainActivity(subId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/activity-log/website-subdomains/${subId}/servers/${serverId}/users/${userId}` });
+    /** Manage plugins (enable/disable/update) */
+    public async managePlugins(
+        managerId: string,
+        serverId: string,
+        userId: string,
+        actionType: string,
+        data: { plugin_name: string[] }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/wpusers/${managerId}/plugins/servers/${serverId}/users/${userId}?action=${actionType}`,
+            data
+        });
     }
 
-    // > Databases
-    public async listDatabases(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    /** Toggle maintenance mode (note: API uses "maintanance" spelling) */
+    public async toggleMaintenanceMode(
+        managerId: string,
+        serverId: string,
+        userId: string,
+        enabled: boolean
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/maintanance/${managerId}/servers/${serverId}/users/${userId}`,
+            data: { maintanance_enabled: enabled }
+        });
     }
 
-    public async listDatabaseUsers(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/appdbusers/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    /** Update WordPress core version */
+    public async updateWpCoreVersion(
+        managerId: string,
+        serverId: string,
+        userId: string,
+        actionType: string
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/version/${managerId}/servers/${serverId}/users/${userId}?type=${actionType}`,
+        });
     }
 
-    public async listDatabaseUserLinks(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/appdatabase/db-user/list/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 4. Domain & Security Operations
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Add domain to website */
+    public async addDomain(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        domains: string[]
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/adddomain/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data: { domains }
+        });
     }
 
-    public async getMysqlStatus(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/status/mysql/servers/${serverId}/users/${userId}` });
+    /** Apply security headers */
+    public async applySecurityHeaders(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: {
+            cj_protection?: boolean;
+            xss_protection?: boolean;
+            ms_protection?: boolean;
+            permissions_policy?: boolean;
+            content_security_policy?: boolean;
+            referrer_policy?: boolean;
+            cross_origin_opener_policy?: boolean;
+        }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/changesecurity/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    // > WordPress
-    public async getWordpressDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/manager/details/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Plans (from earlier Insomnia dump)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    public async getWordpressConfig(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/manager/wpconfig/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getWordpressSearchIndex(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/manager/searchindex/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Laravel
-    public async getLaravelDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/laravel/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getLaravelEnv(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/laravel/view-envfile/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async customToLaravelConversion(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/customtolaravel/conversion/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Other Apps
-    public async getWooCommerceDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/woocommerce/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getPrestashopDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/prestashop/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getMediaWikiDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/mediawiki/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Email
-    public async listEmailAccounts(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/email/list/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getEmailConfig(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/email/configure/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Third-Party
-    public async listIntegrations(userId: string) {
-        return this.request({ method: 'GET', url: `/thirdpartyintegrations/users/${userId}` });
-    }
-
-    // > Teams
-    public async listTeams(userId: string) {
-        return this.request({ method: 'GET', url: `/teams/users/${userId}` });
-    }
-
-    public async listAllTeams(userId: string) {
-        return this.request({ method: 'GET', url: `/all-teams/users/${userId}` });
-    }
-
-    public async listTeamServers(userId: string) {
-        return this.request({ method: 'GET', url: `/team/list-servers/users/${userId}` });
-    }
-
-    // > Users
-    public async listDeletedUsers() {
-        return this.request({ method: 'GET', url: `/users/deleted/admin/list` });
-    }
-
-    public async getUserLoginEntries(userId: string) {
-        return this.request({ method: 'GET', url: `/users/${userId}/login-entries/` });
-    }
-
-    public async getUserAccountActivity(userId: string) {
-        return this.request({ method: 'GET', url: `/users/${userId}/account-activity/` });
-    }
-
-    public async getAdminLoginEntries(userId: string, adminId: string) {
-        return this.request({ method: 'GET', url: `/users/${userId}/login-entries/admin/${adminId}` });
-    }
-
-    public async getAdminAccountActivity(userId: string) {
-        return this.request({ method: 'GET', url: `/users/${userId}/account-activity/admin/` });
-    }
-
-    // > Plans
     public async createPlan(userId: string, data: { plan_id: number; name: string; description: string; monthly_price: number; yearly_price: number; backup_storage_value: number; backup_storage_unit: string; features?: any }) {
         return this.request({ method: 'POST', url: `/cloudstickplans/users/${userId}`, data });
     }
@@ -207,7 +246,6 @@ export class CloudstickApiClient {
     }
 
     public async deletePlan(planId: string, data?: { changed_plan_id: string }) {
-        // Based on Insomnia DELETE /api/v2/cloudstickplan/6 which accepts query params like ?changed_plan_id=1
         let url = `/cloudstickplan/${planId}`;
         if (data && data.changed_plan_id) {
             url += `?changed_plan_id=${data.changed_plan_id}`;
@@ -219,168 +257,198 @@ export class CloudstickApiClient {
         return this.request({ method: 'POST', url: `/cloudstickplan/${planId}/feature/users/${userId}`, data });
     }
 
-    // ─── PHASE 2: Safe Write Endpoints ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    // User Logs (from earlier Insomnia dump)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    // > Server Management
-    public async renameServer(serverId: string, userId: string, newName: string) {
-        return this.request({ method: 'POST', url: `/rename/servers/${serverId}/users/${userId}`, data: { name: newName } });
+    public async getUserLoginEntries(userId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/login-entries/` });
     }
 
-    public async setTimezone(serverId: string, userId: string, timezone: string) {
-        return this.request({ method: 'POST', url: `/timezone/servers/${serverId}/users/${userId}`, data: { timezone } });
+    public async getUserAccountActivity(userId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/account-activity/` });
     }
 
-    public async setHostname(serverId: string, userId: string, hostname: string) {
-        return this.request({ method: 'POST', url: `/hostname/servers/${serverId}/users/${userId}`, data: { hostname } });
+    public async getAdminLoginEntries(userId: string, adminId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/login-entries/admin/${adminId}` });
     }
 
-    public async editServerIp(serverId: string, userId: string, ip: string) {
-        return this.request({ method: 'POST', url: `/editip/servers/${serverId}/users/${userId}`, data: { ip } });
+    public async getAdminAccountActivity(userId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/account-activity/admin/` });
     }
 
-    // > Teams Management
-    public async createTeam(userId: string, data: { name: string; description?: string }) {
-        return this.request({ method: 'POST', url: `/teams/users/${userId}`, data });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 5. SSL Certificate Management (official v2)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Issue free SSL (Let's Encrypt) */
+    public async issueSSL(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { authorisation: string; access: string; brotli_enabled?: boolean }
+    ) {
+        return this.request({
+            method: 'POST',
+            url: `/ssl/free-certificate/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    public async updateTeam(teamId: string, userId: string, data: { name?: string; description?: string }) {
-        return this.request({ method: 'PUT', url: `/teams/${teamId}/users/${userId}`, data });
+    /** Update SSL settings (Force HTTPS / TLS / Ciphers) */
+    public async updateSSLSettings(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { brotli_enabled?: boolean; access?: string; tls_version?: string; cipher_suite?: string }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/ssl/update-certificate-settings/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    public async deleteTeam(teamId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/teams/${teamId}/users/${userId}` });
+    /** Remove SSL certificate */
+    public async deleteSSL(websiteId: string, serverId: string, userId: string) {
+        return this.request({
+            method: 'DELETE',
+            url: `/ssl/remove-certificate/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+        });
     }
 
-    public async addTeamMember(teamId: string, userId: string, memberId: string) {
-        return this.request({ method: 'POST', url: `/teams/${teamId}/members/users/${userId}`, data: { member_id: memberId } });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 6. Email Account Provisioning (official v2)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List email accounts */
+    public async listEmailAccounts(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/email/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
-    public async removeTeamMember(teamId: string, memberId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/teams/${teamId}/members/${memberId}/users/${userId}` });
+    /** Create email account */
+    public async createEmailAccount(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { name: string; password: string; quota_type?: string; quota_value?: number; quota_unit?: string }
+    ) {
+        return this.request({
+            method: 'POST',
+            url: `/email/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    // > System User Management
-    public async createSystemUser(serverId: string, userId: string, data: { username: string; password: string }) {
-        return this.request({ method: 'POST', url: `/systemusers/servers/${serverId}/users/${userId}`, data });
+    /** Update email password */
+    public async updateEmailPassword(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { name: string; password: string }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/email/password/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data
+        });
     }
 
-    public async updateSystemUser(sysUserId: string, serverId: string, userId: string, data: { password?: string }) {
-        return this.request({ method: 'PUT', url: `/systemusers/${sysUserId}/servers/${serverId}/users/${userId}`, data });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 7. System User Access — SSH/SFTP (official v2)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List system users */
+    public async listSystemUsers(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/systemuser/servers/${serverId}/users/${userId}` });
     }
 
+    /** Create system user */
+    public async createSystemUser(serverId: string, userId: string, data: { name: string; password: string }) {
+        return this.request({ method: 'POST', url: `/systemuser/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Update system user password */
+    public async updateSystemUser(sysUserId: string, serverId: string, userId: string, data: { password: string; confirm_password: string }) {
+        return this.request({ method: 'PATCH', url: `/systemuser/${sysUserId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Delete system user */
     public async deleteSystemUser(sysUserId: string, serverId: string, userId: string) {
         return this.request({ method: 'DELETE', url: `/systemuser/${sysUserId}/servers/${serverId}/users/${userId}` });
     }
 
-    public async listSystemUsers(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/systemusers/servers/${serverId}/users/${userId}` });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 8. Team Collaboration & Access (official v2)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List user's teams */
+    public async listTeams(userId: string) {
+        return this.request({ method: 'GET', url: `/teams/users/${userId}` });
     }
 
-    // > Database User Management
+    /** Create team */
+    public async createTeam(userId: string, data: { name: string; members: string[]; servers: number[] }) {
+        return this.request({ method: 'POST', url: `/team/users/${userId}`, data });
+    }
+
+    /** Add member to existing team */
+    public async addTeamMember(teamId: string, userId: string, data: { members: string[] }) {
+        return this.request({ method: 'PATCH', url: `/team/${teamId}/add-user/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Legacy stubs — no v2 docs provided yet.
+    // TODO: Replace once backend team confirms v2 paths.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // > Database Users (legacy)
+    public async listDatabaseUsers(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/appdbusers/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
     public async createDatabaseUser(websiteId: string, serverId: string, userId: string, data: { username: string; password: string }) {
         return this.request({ method: 'POST', url: `/appdbusers/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
-
-    public async updateDatabaseUser(dbUserId: string, websiteId: string, serverId: string, userId: string, data: { password?: string }) {
-        return this.request({ method: 'PUT', url: `/appdbusers/${dbUserId}/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
     public async deleteDatabaseUser(dbUserId: string, websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'DELETE', url: `/appdbusers/${dbUserId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-
-    public async linkDatabaseUser(websiteId: string, serverId: string, userId: string, data: { db_id: string; db_user_id: string }) {
-        return this.request({ method: 'POST', url: `/appdatabase/db-user/link/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    public async updateDatabaseUser(dbUserId: string, websiteId: string, serverId: string, userId: string, data: { password?: string }) {
+        return this.request({ method: 'PATCH', url: `/appdbusers/${dbUserId}/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
 
-    public async unlinkDatabaseUser(linkId: string, websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/appdatabase/db-user/unlink/${linkId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    // > Databases (legacy)
+    public async listDatabases(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-
-    // > Email Account Management
-    public async createEmail(websiteId: string, serverId: string, userId: string, data: { email: string; password: string }) {
-        return this.request({ method: 'POST', url: `/email/create/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    public async updateEmail(emailId: string, websiteId: string, serverId: string, userId: string, data: { password?: string; quota?: number }) {
-        return this.request({ method: 'PUT', url: `/email/${emailId}/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    public async deleteEmail(emailId: string, websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/email/${emailId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Config Updates (WordPress / Laravel)
-    public async updateWordpressConfig(websiteId: string, serverId: string, userId: string, data: Record<string, unknown>) {
-        return this.request({ method: 'POST', url: `/wordpress/manager/wpconfig/update/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    public async updateLaravelEnv(websiteId: string, serverId: string, userId: string, data: { content: string }) {
-        return this.request({ method: 'POST', url: `/laravel/update-envfile/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    // ─── PHASE 3: Full API Surface Endpoints ──────────────────────────────────
-
-    // > SSL Management
-    public async issueSSL(websiteId: string, serverId: string, userId: string, data: { ssl_type?: string }) {
-        return this.request({ method: 'POST', url: `/ssl/issue/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    public async renewSSL(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/ssl/renew/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async deleteSSL(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/ssl/delete/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getSSLStatus(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/ssl/status/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async updateSSLSettings(websiteId: string, serverId: string, userId: string, data: Record<string, unknown>) {
-        return this.request({ method: 'POST', url: `/ssl/settings/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    // > Database Management (create, delete)
     public async createDatabase(websiteId: string, serverId: string, userId: string, data: { name: string }) {
         return this.request({ method: 'POST', url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
-
     public async deleteDatabase(dbId: string, websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'DELETE', url: `/appdatabase/${dbId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
-    // > PHP Version Switching (via Cloudstick API — Lane 1)
-    public async switchPhpVersion(websiteId: string, serverId: string, userId: string, data: { php_version: string }) {
-        return this.request({ method: 'POST', url: `/php/switch/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    public async getPhpVersion(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/php/version/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // > Website Management
-    public async deleteWebsite(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    public async getWebsiteDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/websites/${websiteId}/servers/${serverId}/users/${userId}` });
-    }
-
-    // ─── PHASE 4: Cron Job Management ─────────────────────────────────────────
-
+    // > Cron Jobs (legacy)
     public async listCronJobs(websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'GET', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-
     public async createCronJob(websiteId: string, serverId: string, userId: string, data: { command: string; schedule: string }) {
         return this.request({ method: 'POST', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
-
     public async deleteCronJob(cronId: string, websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'DELETE', url: `/cronjobs/${cronId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // > SSL Status (legacy — no v2 equivalent provided)
+    public async getSSLStatus(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/ssl/status/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // > PHP (legacy — getPhpVersion and switchPhpVersion kept for downstream tools)
+    public async getPhpVersion(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/php/version/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async switchPhpVersion(websiteId: string, serverId: string, userId: string, data: { php_version: string }) {
+        return this.request({ method: 'POST', url: `/php/switch/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
 }
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const EnvSchema = z.object({
     // LLM
-    LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required'),
+    LLM_API_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().min(1).optional()),
 
     LLM_BASE_URL: z.string().url().optional(),
     LLM_MODEL: z.string().default('gpt-4o'),
@@ -32,9 +32,9 @@ const EnvSchema = z.object({
     TELEGRAM_USER_ID: z.preprocess((val) => val === '' ? undefined : val, z.coerce.number().int().positive().optional()),
 
     // Slack
-    SLACK_BOT_TOKEN: z.string().min(1, 'SLACK_BOT_TOKEN is required'),
-    SLACK_APP_TOKEN: z.string().min(1, 'SLACK_APP_TOKEN is required'),
-    SLACK_USER_ID: z.string().min(1, 'SLACK_USER_ID is required'),
+    SLACK_BOT_TOKEN: z.preprocess((val) => val === '' ? undefined : val, z.string().min(1).optional()),
+    SLACK_APP_TOKEN: z.preprocess((val) => val === '' ? undefined : val, z.string().min(1).optional()),
+    SLACK_USER_ID: z.preprocess((val) => val === '' ? undefined : val, z.string().min(1).optional()),
     SLACK_CHANNEL_ID: z.string().optional(),
 
     // Voyage AI — semantic embeddings for fix memory
@@ -49,6 +49,9 @@ const EnvSchema = z.object({
     SSH_USER: z.string().default('cloud-agent'),
     SSH_HOST: z.string().optional(),
     SSH_PORT: z.coerce.number().int().positive().default(22),
+
+    // Hub-level encryption key for SSH private keys at rest (32-byte hex = 64 chars)
+    ENCRYPTION_KEY: z.string().optional(),
 });
 
 function loadEnv() {

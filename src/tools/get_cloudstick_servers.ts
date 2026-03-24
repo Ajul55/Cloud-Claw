@@ -1,18 +1,17 @@
-import { z } from 'zod';
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { env } from '../config/env.js';
 
-export const checkCloudstickConnectionTool: Tool = {
-    name: 'check_cloudstick_connection',
-    description: 'Diagnoses whether the Cloudstick API is connected and responding correctly by testing the credentials in the .env file against the live API.',
+export const getCloudstickServersTool: Tool = {
+    name: 'get_cloudstick_servers',
+    description: 'Retrieves the list of all servers owned by the configured Cloudstick user. Crucial for finding the server_id to use in other tools when the user only knows the server name or IP.',
     parameters: {
         type: 'object',
         properties: {},
         required: []
     },
-    approvalTier: 1,
+    approvalTier: 1, // Read-only
     execute: async () => {
         const effectiveUserId = getCloudstickUser()?.cloudstick_user_id ?? env.CLOUDSTICK_USER_ID;
         if (!effectiveUserId) {
@@ -24,16 +23,16 @@ export const checkCloudstickConnectionTool: Tool = {
 
         try {
             const client = getCloudstickClient();
-            // Test connection with a lightweight read operation
-            await client.listPlans(effectiveUserId);
+            const response = await client.listServersByUser(effectiveUserId);
+
             return {
                 success: true,
-                output: `Cloudstick API connection successful! Credentials for User ID ${effectiveUserId} are mapped and API requests are succeeding.`,
+                output: `Servers List:\n${JSON.stringify(response, null, 2)}`,
             };
         } catch (error: any) {
             return {
                 success: false,
-                output: `Cloudstick API connection failed.\nError: ${error.message}`,
+                output: `Failed to retrieve servers list.\nError: ${error.message}`,
             };
         }
     }

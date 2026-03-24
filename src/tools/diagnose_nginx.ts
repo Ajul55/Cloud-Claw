@@ -30,8 +30,7 @@ export const diagnoseNginxTool: Tool = {
         properties: {
             server_label: {
                 type: 'string',
-                description: 'Target server label. Options: "production" (139.84.130.63) or "test" (65.20.82.177). If not specified, defaults to production.',
-                enum: ['production', 'test'],
+                description: 'Target server label or ID (e.g. "production"). Must match a server from the registered list.',
             },
             host: {
                 type: 'string',

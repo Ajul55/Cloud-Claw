@@ -1,4 +1,5 @@
-import { getPool, isDBConfigured } from '../database/db.js';
+import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 
 export interface ServerNode {
     id: number;
@@ -9,30 +10,40 @@ export interface ServerNode {
     active: boolean;
 }
 
-export const FALLBACK_SERVERS: ServerNode[] = [
-    { id: 1, label: 'production', ip: '139.84.130.63', sshUser: 'root', sshPort: 22, active: true },
-    { id: 2, label: 'test', ip: '65.20.82.177', sshUser: 'root', sshPort: 22, active: true },
-];
+interface CloudstickApiServer {
+    id?: number | string;
+    label?: string;
+    name?: string;
+    host_name?: string;
+    ip?: string;
+    ip4?: string;
+    server_ip?: string;
+    is_active?: boolean;
+}
 
 export async function getAllServers(): Promise<ServerNode[]> {
-    if (!isDBConfigured()) return FALLBACK_SERVERS;
+    const user = getCloudstickUser();
+    if (!user?.cloudstick_user_id) return [];
 
     try {
-        const result = await getPool().query<ServerNode>(
-            `SELECT id,
-                    label,
-                    ip,
-                    ssh_user AS "sshUser",
-                    ssh_port AS "sshPort",
-                    active
-             FROM servers
-             WHERE active = true
-             ORDER BY id`
-        );
-        return result.rows;
+        const client = getCloudstickClient();
+        const response = await client.listServersByUser(user.cloudstick_user_id) as {
+            message?: { servers?: CloudstickApiServer[] };
+        };
+        const servers = response?.message?.servers ?? [];
+
+        return servers
+            .map((s) => ({
+                id: typeof s.id === 'string' ? parseInt(s.id, 10) : (s.id ?? 0),
+                label: s.name ?? s.label ?? s.host_name ?? 'unknown',
+                ip: s.ip4 ?? s.ip ?? s.server_ip ?? '',
+                sshUser: 'root',
+                sshPort: 22,
+                active: true, // Cloudstick API sometimes returns is_active: false for running nodes
+            }));
     } catch (err) {
-        console.warn('[server_registry] Falling back to in-memory registry:', err);
-        return FALLBACK_SERVERS;
+        console.warn('[server_registry] Cloudstick API failed:', err);
+        return [];
     }
 }
 

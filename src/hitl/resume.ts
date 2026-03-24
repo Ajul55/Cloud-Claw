@@ -12,6 +12,42 @@ import { touchSession } from '../jobs/timeout_sessions.js';
 import { saveFix } from '../memory/fix_memory.js';
 import type { ReplyFn, ApprovalFn } from '../tools/types.js';
 
+export function extractApprovedToolCall(
+    messages: Array<Record<string, unknown>>,
+    toolCallId: string,
+): { toolName: string; args: Record<string, unknown> } | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i] as any;
+        if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) {
+            continue;
+        }
+
+        const match = message.tool_calls.find((toolCall: any) => toolCall?.id === toolCallId);
+        if (!match?.function?.name) {
+            continue;
+        }
+
+        let args: Record<string, unknown> = {};
+        if (typeof match.function.arguments === 'string' && match.function.arguments.trim()) {
+            try {
+                const parsed = JSON.parse(match.function.arguments);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    args = parsed as Record<string, unknown>;
+                }
+            } catch (err) {
+                console.warn(`[resume] Failed to parse stored tool args for ${toolCallId}:`, err);
+            }
+        }
+
+        return {
+            toolName: String(match.function.name),
+            args,
+        };
+    }
+
+    return null;
+}
+
 export async function resumeApprovedSession(
     approvalId: number,
     approved: boolean,
@@ -37,16 +73,7 @@ export async function resumeApprovedSession(
         return;
     }
 
-    // 2. Update status immediately.
-    // updateApprovalStatus now returns a boolean indicating if the row was actually updated.
-    // If it returns false, another process (e.g. double click) already handled it.
-    const didUpdate = await updateApprovalStatus(approvalId, approved ? 'approved' : 'rejected', pilotUserId);
-    if (!didUpdate) {
-        console.warn(`[resume] Approval ${approvalId} was already handled or cannot be updated. Aborting duplicate run.`);
-        return;
-    }
-
-    // 3. Load the paused session
+    // 2. Load the paused session
     const session = await getSession(approval.session_id);
     if (!session) {
         await onReply('⚠️ Session expired — please repeat your request.');
@@ -80,6 +107,13 @@ export async function resumeApprovedSession(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (m: any) => m.role === 'tool' && m.tool_call_id === approval.tool_call_id
         );
+
+        const didUpdate = await updateApprovalStatus(approvalId, 'rejected', pilotUserId);
+        if (!didUpdate) {
+            console.warn(`[resume] Approval ${approvalId} was already handled before rejection could be applied.`);
+            await onReply('⚠️ This approval is already being handled or has already been processed.');
+            return;
+        }
 
         if (placeholderIndex !== -1) {
             messages[placeholderIndex] = {
@@ -123,8 +157,25 @@ export async function resumeApprovedSession(
     let toolName: string;
     let toolArgs: Record<string, unknown>;
     try {
+        const storedToolCall = extractApprovedToolCall(
+            messages as unknown as Array<Record<string, unknown>>,
+            approval.tool_call_id,
+        );
         const decoded = decodeToolApprovalCommand(approval.command);
-        if (decoded) {
+
+        if (storedToolCall && decoded && storedToolCall.toolName !== decoded.toolName) {
+            console.warn(
+                `[resume] Stored tool name (${storedToolCall.toolName}) does not match encoded approval tool (${decoded.toolName}). Using stored tool call.`,
+            );
+        }
+
+        if (storedToolCall && decoded) {
+            toolName = storedToolCall.toolName;
+            toolArgs = { ...decoded.args, ...storedToolCall.args };
+        } else if (storedToolCall) {
+            toolName = storedToolCall.toolName;
+            toolArgs = storedToolCall.args;
+        } else if (decoded) {
             toolName = decoded.toolName;
             toolArgs = decoded.args;
         } else {
@@ -164,6 +215,7 @@ export async function resumeApprovedSession(
 
             if (currentHash !== savedHash) {
                 console.warn(`[resume] ⚠️ State drift detected for ${toolName}! saved=${savedHash} current=${currentHash}`);
+                await updateApprovalStatus(approvalId, 'expired', pilotUserId);
                 await onReply(
                     '⚠️ **Execution Aborted — State Drift Detected**\n\n'
                     + 'The server state has changed since this approval was requested. '
@@ -177,6 +229,13 @@ export async function resumeApprovedSession(
         } catch (err) {
             console.warn('[resume] getCurrentState re-check failed, proceeding cautiously:', err);
         }
+    }
+
+    const didUpdate = await updateApprovalStatus(approvalId, 'approved', pilotUserId);
+    if (!didUpdate) {
+        console.warn(`[resume] Approval ${approvalId} was already handled before execution could start.`);
+        await onReply('⚠️ This approval is already being handled or has already been processed.');
+        return;
     }
 
     // 6. Execute the tool NOW

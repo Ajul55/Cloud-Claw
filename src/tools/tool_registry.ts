@@ -16,7 +16,6 @@ import { sreSearchTool } from './sre_search.js';
 import { fixMemorySearchTool } from '../memory/fix_memory.js';
 import { diagnoseServicesTool } from './diagnose_services.js';
 import { fixWordpressTool } from './fix_wordpress.js';
-import { checkSslTool, renewSslTool } from './ssl_tools.js';
 import { managePhpTool } from './manage_php.js';
 import { repairMysqlTool } from './repair_mysql.js';
 import { cleanupDiskTool } from './cleanup_disk.js';
@@ -25,12 +24,14 @@ import { diagnoseDomainTool } from './diagnose_domain.js';
 import { cloudflareCachePurgeTool } from './cloudflare_cache_purge.js';
 import { createSystemUserTool, deleteSystemUserTool, changeSystemUserPasswordTool } from './manage_system_users.js';
 import { createDatabaseUserTool, deleteDatabaseUserTool, changeDatabaseUserPasswordTool } from './manage_database_users.js';
-import { issueSSLTool, renewSSLApiTool, deleteSSLTool, updateSSLSettingsTool } from './ssl_api_tools.js';
+import { checkSslApiTool, issueSSLTool, renewSSLApiTool, deleteSSLTool, updateSSLSettingsTool } from './ssl_api_tools.js';
 import { createDatabaseTool, deleteDatabaseTool } from './manage_databases.js';
 import { switchPhpApiTool } from './switch_php_api.js';
 import { emergencyRestartTool } from './emergency_restart.js';
 import { listCronJobsTool, createCronJobTool, deleteCronJobTool } from './manage_cron_jobs.js';
 import { checkCloudstickConnectionTool } from './check_cloudstick_connection.js';
+import { getCloudstickAccountDetailsTool } from './get_cloudstick_account_details.js';
+import { getCloudstickServersTool } from './get_cloudstick_servers.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -46,8 +47,6 @@ const ALL_TOOLS: Tool[] = [
     fixMemorySearchTool,
     diagnoseServicesTool,
     fixWordpressTool,
-    checkSslTool,
-    renewSslTool,
     managePhpTool,
     repairMysqlTool,
     cleanupDiskTool,
@@ -59,6 +58,7 @@ const ALL_TOOLS: Tool[] = [
     deleteDatabaseUserTool,
     changeDatabaseUserPasswordTool,
     // Phase 3: Full API Surface (Tier 3)
+    checkSslApiTool,
     issueSSLTool,
     renewSSLApiTool,
     deleteSSLTool,
@@ -72,6 +72,8 @@ const ALL_TOOLS: Tool[] = [
     createCronJobTool,
     deleteCronJobTool,
     checkCloudstickConnectionTool,
+    getCloudstickAccountDetailsTool,
+    getCloudstickServersTool,
 ];
 
 /** Map for O(1) lookup by name */

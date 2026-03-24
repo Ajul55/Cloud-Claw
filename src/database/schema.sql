@@ -116,3 +116,22 @@ CREATE INDEX IF NOT EXISTS idx_fix_memory_problem_class
 CREATE INDEX IF NOT EXISTS idx_fix_memory_created_at
   ON fix_memory(created_at DESC);
 
+-- ─── Multi-Tenant Users ────────────────────────────────────────────────────────
+-- Each user authenticating via Slack/Telegram has their own Cloudstick credentials.
+CREATE TABLE IF NOT EXISTS users (
+  id                    SERIAL PRIMARY KEY,
+  platform              TEXT NOT NULL,         -- 'slack' or 'telegram'
+  platform_id           TEXT NOT NULL UNIQUE, -- Slack user ID (U...) or Telegram numeric ID
+  cloudstick_api_key    TEXT,
+  cloudstick_api_secret TEXT,
+  cloudstick_user_id    TEXT,
+  ssh_private_key       TEXT,                  -- AES-256-GCM encrypted
+  ssh_public_key        TEXT,
+  setup_at              TIMESTAMPTZ,
+  updated_at            TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (platform, platform_id)
+);
+
+CREATE INDEX IF NOT EXISTS users_platform_idx ON users (platform);
+CREATE INDEX IF NOT EXISTS users_platform_id_idx ON users (platform_id);
+

@@ -4,6 +4,22 @@ export interface ToolApprovalPayload {
 }
 
 const TOOL_PREFIX = 'TOOL:';
+const INTERNAL_APPROVAL_ARG_KEYS = new Set(['__stateHash']);
+const SENSITIVE_APPROVAL_ARG_PATTERNS = [
+    /pass(word)?/i,
+    /secret/i,
+    /token/i,
+    /api[-_]?key/i,
+    /private[-_]?key/i,
+];
+
+export function isInternalApprovalArg(key: string): boolean {
+    return INTERNAL_APPROVAL_ARG_KEYS.has(key);
+}
+
+export function isSensitiveApprovalArg(key: string): boolean {
+    return SENSITIVE_APPROVAL_ARG_PATTERNS.some((pattern) => pattern.test(key));
+}
 
 export function encodeToolApprovalCommand(toolName: string, args: Record<string, string>): string {
     const encodedArgs = Object.entries(args)
@@ -57,6 +73,11 @@ export function describeApprovalCommand(command: string): {
 
     return {
         title: `Run tool: ${parsed.toolName}`,
-        details: Object.entries(parsed.args).map(([label, value]) => ({ label, value })),
+        details: Object.entries(parsed.args)
+            .filter(([label]) => !isInternalApprovalArg(label))
+            .map(([label, value]) => ({
+                label,
+                value: isSensitiveApprovalArg(label) ? '[REDACTED]' : value,
+            })),
     };
 }

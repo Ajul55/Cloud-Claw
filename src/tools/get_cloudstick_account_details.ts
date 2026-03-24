@@ -4,15 +4,15 @@ import { getCloudstickClient } from '../api/cloudstick_client.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { env } from '../config/env.js';
 
-export const checkCloudstickConnectionTool: Tool = {
-    name: 'check_cloudstick_connection',
-    description: 'Diagnoses whether the Cloudstick API is connected and responding correctly by testing the credentials in the .env file against the live API.',
+export const getCloudstickAccountDetailsTool: Tool = {
+    name: 'get_cloudstick_account_details',
+    description: 'Retrieves the Cloudstick account details and profile information for the configured user. Call this when the user asks for their account information or details.',
     parameters: {
         type: 'object',
         properties: {},
         required: []
     },
-    approvalTier: 1,
+    approvalTier: 1, // Read-only
     execute: async () => {
         const effectiveUserId = getCloudstickUser()?.cloudstick_user_id ?? env.CLOUDSTICK_USER_ID;
         if (!effectiveUserId) {
@@ -24,16 +24,19 @@ export const checkCloudstickConnectionTool: Tool = {
 
         try {
             const client = getCloudstickClient();
-            // Test connection with a lightweight read operation
-            await client.listPlans(effectiveUserId);
+            const response = await client.request({
+                method: 'GET',
+                url: `/users/${effectiveUserId}`
+            });
+
             return {
                 success: true,
-                output: `Cloudstick API connection successful! Credentials for User ID ${effectiveUserId} are mapped and API requests are succeeding.`,
+                output: `Account Details:\n${JSON.stringify(response.user || response, null, 2)}`,
             };
         } catch (error: any) {
             return {
                 success: false,
-                output: `Cloudstick API connection failed.\nError: ${error.message}`,
+                output: `Failed to retrieve account details.\nError: ${error.message}`,
             };
         }
     }

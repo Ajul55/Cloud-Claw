@@ -7,9 +7,12 @@
 
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { env } from '../config/env.js';
 
-const userId = () => env.CLOUDSTICK_USER_ID ?? '';
+const userId = () => getCloudstickUser()?.cloudstick_user_id
+    ?? env.CLOUDSTICK_USER_ID
+    ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
 export const switchPhpApiTool: Tool = {
     name: 'switch_php_api',

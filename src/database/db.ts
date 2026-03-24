@@ -5,13 +5,14 @@ const { Pool } = pg;
 
 // ─── Singleton pool ────────────────────────────────────────────────────────────
 let _pool: pg.Pool | null = null;
+let _dbReady = false;
 
 export function isDBConfigured(): boolean {
-    return !!env.DATABASE_URL;
+    return _dbReady;
 }
 
 export function getPool(): pg.Pool {
-    if (!isDBConfigured()) {
+    if (!env.DATABASE_URL) {
         throw new Error('[DB] DATABASE_URL not configured — database operations unavailable');
     }
     if (!_pool) {
@@ -30,7 +31,8 @@ export function getPool(): pg.Pool {
 }
 
 export async function connectDB(): Promise<void> {
-    if (!isDBConfigured()) {
+    if (!env.DATABASE_URL) {
+        _dbReady = false;
         console.log('[DB] No DATABASE_URL configured — running without persistence');
         return;
     }
@@ -39,6 +41,7 @@ export async function connectDB(): Promise<void> {
         const pool = getPool();
         const client = await pool.connect();
         client.release();
+        _dbReady = true;
 
         try {
             // Lightweight migrations: ensure new columns exist
@@ -70,12 +73,13 @@ export async function connectDB(): Promise<void> {
         console.error('[DB]   2. sudo -u postgres createdb -O cloudclaw cloudclaw');
         console.error('[DB]   3. psql -U cloudclaw -d cloudclaw -f src/database/schema.sql');
         console.error('[DB] Falling back to in-memory mode.');
-        // Reset pool so isDBConfigured()-guarded code falls back to in-memory
+        _dbReady = false;
         _pool = null;
     }
 }
 
 export async function closeDB(): Promise<void> {
+    _dbReady = false;
     if (_pool) {
         await _pool.end();
         _pool = null;

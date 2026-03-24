@@ -8,10 +8,13 @@
 
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { env } from '../config/env.js';
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
-const userId = () => env.CLOUDSTICK_USER_ID ?? '';
+const userId = () => getCloudstickUser()?.cloudstick_user_id
+    ?? env.CLOUDSTICK_USER_ID
+    ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
 // ─── Issue SSL (Tier 3) ──────────────────────────────────────────────────────
 
@@ -25,23 +28,22 @@ export const issueSSLTool: Tool = {
         properties: {
             website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
+            server_name: { type: 'string', description: 'Human-readable server label' },
             domain: { type: 'string', description: 'Domain name (for display)' },
-            ssl_type: { type: 'string', description: 'SSL type (e.g. "letsencrypt", "custom"). Defaults to letsencrypt.' },
         },
         required: ['website_id', 'server_id'],
     },
     approvalTier: 3,
     getRationale: (args) =>
-        `This will issue a new SSL certificate for ${args.domain ?? 'this website'} on server ${args.server_label ?? args.server_id}.`,
+        `This will issue a new SSL certificate for ${args.domain ?? 'this website'} on server ${args.server_name ?? args.server_id}.`,
     getApprovalRequest: (args) => ({
         command: encodeToolApprovalCommand('issue_ssl', {
             website_id: String(args.website_id),
             server_id: String(args.server_id),
-            server_label: String(args.server_label ?? ''),
+            server_name: String(args.server_name ?? ''),
             domain: String(args.domain ?? ''),
         }),
-        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        targetHost: String(args.server_name ?? args.server_id ?? 'unknown'),
         rationale: `Issue SSL certificate for ${args.domain ?? 'website'}.`,
     }),
     getCurrentState: async (args) => {
@@ -56,7 +58,7 @@ export const issueSSLTool: Tool = {
             const client = getCloudstickClient();
             const result = await client.issueSSL(
                 String(args.website_id), String(args.server_id), userId(),
-                { ssl_type: String(args.ssl_type ?? 'letsencrypt') }
+                { authorisation: 'HTTP', access: 'HTTPS', brotli_enabled: true }
             );
 
             // Post-issue verification
@@ -87,7 +89,7 @@ export const renewSSLApiTool: Tool = {
         properties: {
             website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
+            server_name: { type: 'string', description: 'Human-readable server label' },
             domain: { type: 'string', description: 'Domain name (for display)' },
             force: { type: 'boolean', description: 'Set true to bypass the 24-hour guard (dangerous)' },
         },
@@ -95,7 +97,18 @@ export const renewSSLApiTool: Tool = {
     },
     approvalTier: 3,
     getRationale: (args) =>
-        `This will renew the SSL certificate for ${args.domain ?? 'this website'} on server ${args.server_label ?? args.server_id}.`,
+        `This will renew the SSL certificate for ${args.domain ?? 'this website'} on server ${args.server_name ?? args.server_id}.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('renew_ssl_api', {
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_name: String(args.server_name ?? ''),
+            domain: String(args.domain ?? ''),
+            force: String(args.force ?? false),
+        }),
+        targetHost: String(args.server_name && args.server_name !== 'undefined' ? args.server_name : args.server_id),
+        rationale: `Renew SSL certificate for ${args.domain ?? 'website'}.`,
+    }),
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
@@ -127,7 +140,7 @@ export const renewSSLApiTool: Tool = {
 
         try {
             const client = getCloudstickClient();
-            const result = await client.renewSSL(websiteId, serverId, userId());
+            const result = await client.issueSSL(websiteId, serverId, userId(), { authorisation: 'HTTP', access: 'HTTPS', brotli_enabled: true });
 
             // Track successful renewal for race-condition guard
             recentRenewals.set(renewalKey, Date.now());
@@ -154,7 +167,7 @@ export const deleteSSLTool: Tool = {
         properties: {
             website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
+            server_name: { type: 'string', description: 'Human-readable server label' },
             domain: { type: 'string', description: 'Domain name (for display)' },
         },
         required: ['website_id', 'server_id'],
@@ -162,6 +175,16 @@ export const deleteSSLTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will DELETE the SSL certificate for ${args.domain ?? 'this website'}. The site will revert to HTTP only.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('delete_ssl', {
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_name: String(args.server_name ?? ''),
+            domain: String(args.domain ?? ''),
+        }),
+        targetHost: String(args.server_name && args.server_name !== 'undefined' ? args.server_name : args.server_id),
+        rationale: `DELETE SSL certificate for ${args.domain ?? 'website'}. Reverting to HTTP.`,
+    }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
@@ -191,6 +214,16 @@ export const updateSSLSettingsTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will update SSL settings for the website on server ${args.server_label ?? args.server_id}.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('update_ssl_settings', {
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+            settings: JSON.stringify(args.settings ?? {}),
+        }),
+        targetHost: String(args.server_label && args.server_label !== 'undefined' ? args.server_label : args.server_id),
+        rationale: `Update SSL settings for website ID ${args.website_id}.`,
+    }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
@@ -201,6 +234,47 @@ export const updateSSLSettingsTool: Tool = {
             return { success: true, output: `SSL settings updated.\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `SSL settings update failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+    },
+};
+
+// ─── Check SSL Status (Tier 1) ───────────────────────────────────────────────
+
+export const checkSslApiTool: Tool = {
+    name: 'check_ssl_api',
+    description: 'Check if an SSL certificate is present and get its status via the Cloudstick API. Use this instead of SSH check_ssl.',
+    parameters: {
+        type: 'object',
+        properties: {
+            server_id: { type: 'string', description: 'Cloudstick server ID' },
+            website_id: { type: 'string', description: 'Cloudstick website ID (optional if checking server-level SSL)' },
+        },
+        required: ['server_id'],
+    },
+    approvalTier: 1, // Read-only
+    execute: async (args) => {
+        try {
+            const client = getCloudstickClient();
+            if (args.website_id) {
+                const status = await client.getSSLStatus(String(args.website_id), String(args.server_id), userId());
+                return { success: true, output: `SSL Status for Website ${args.website_id}:\n${JSON.stringify(status, null, 2)}` };
+            } else {
+                const response = await client.listServersByUser(userId());
+                const server = response?.message?.servers?.find((s: any) => String(s.id) === String(args.server_id));
+                if (!server) {
+                    return { success: false, output: `Server ID ${args.server_id} not found.` };
+                }
+                const sslInfo = {
+                    is_ssl_installed: server.is_ssl_installed,
+                    ssl_provider: server.ssl_provider,
+                    ssl_created_at: server.ssl_created_at,
+                    ssl_expired_at: server.ssl_expired_at,
+                    host_name: server.host_name,
+                };
+                return { success: true, output: `SSL Status for Server ${args.server_id}:\n${JSON.stringify(sslInfo, null, 2)}` };
+            }
+        } catch (err) {
+            return { success: false, output: `API check failed: ${err instanceof Error ? err.message : String(err)}` };
         }
     },
 };

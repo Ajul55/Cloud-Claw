@@ -64,7 +64,7 @@ export function createTelegramBot(): Bot {
         };
 
         try {
-            const isCommand = await handleSlashCommand(text, userId, onReply);
+            const isCommand = await handleSlashCommand(text, 'telegram', userId, onReply);
             if (isCommand) return;
 
             const indicator = new StatusIndicator('telegram', String(ctx.chat?.id || userId), ctx.api);

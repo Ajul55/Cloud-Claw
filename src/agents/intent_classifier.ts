@@ -4,7 +4,7 @@ export interface Intent {
     requiresTool: boolean;
     toolHint: 'diagnose_nginx' | 'diagnose_domain' | 'cloudflare_cache_purge' | 'diagnose_services' | 'execute_ssh_command' | 'check_cloudstick_connection' | 'none';
     isAudit: boolean;
-    targetServer: 'production' | 'test' | 'all' | 'unknown';
+    targetServer: string;
     domains: string[];
     isApprovalResponse: boolean;
     needsClarification: boolean;
@@ -24,7 +24,7 @@ Analyze the user's message and return a strictly typed JSON object matching this
   "requiresTool": boolean, // Does this request need server read/write action to fulfill? (True for fixes, diagnostics. False for general concepts)
   "toolHint": "diagnose_nginx" | "diagnose_domain" | "cloudflare_cache_purge" | "diagnose_services" | "execute_ssh_command" | "check_cloudstick_connection" | "none", // Best tool to start with
   "isAudit": boolean, // Is the user just asking for a status check/audit without making changes?
-  "targetServer": "production" | "test" | "all" | "unknown", // Did they specify a server?
+  "targetServer": string, // Did they specify a server? Return the exact server IP, hostname, or label. Return "unknown" if not specified.
   "domains": string[], // List of real hostnames mentioned (e.g. "example.com"). NO IP addresses, NO version strings (e.g. "v2.0"), NO file extensions masquerading as domains (e.g. ".ts", ".js", ".conf").
   "isApprovalResponse": boolean, // Is this an approval response like "yes", "proceed", "no", "reject"?
   "needsClarification": boolean, // Is the request too vague to act upon safely?

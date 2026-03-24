@@ -56,7 +56,6 @@ export const diagnoseDomainTool: Tool = {
             server_label: {
                 type: 'string',
                 description: 'Target server label. Options: production or test. Defaults to production.',
-                enum: ['production', 'test'],
             },
             expected_service: {
                 type: 'string',

@@ -7,10 +7,13 @@
 
 import type { Tool } from './types.js';
 import { getCloudstickClient } from '../api/cloudstick_client.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { env } from '../config/env.js';
 import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
-const userId = () => env.CLOUDSTICK_USER_ID ?? '';
+const userId = () => getCloudstickUser()?.cloudstick_user_id
+    ?? env.CLOUDSTICK_USER_ID
+    ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
 // ─── List Cron Jobs (Read-Only) ──────────────────────────────────────────────
 
@@ -64,7 +67,7 @@ export const createCronJobTool: Tool = {
             website_id: String(args.website_id),
             server_id: String(args.server_id),
             server_label: String(args.server_label ?? ''),
-            cron_command: String(args.command),
+            command: String(args.command),
             schedule: String(args.schedule),
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
@@ -109,6 +112,16 @@ export const deleteCronJobTool: Tool = {
     approvalTier: 3,
     getRationale: (args) =>
         `This will delete cron job ${args.cron_id} from server ${args.server_label ?? args.server_id}.`,
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('delete_cron_job', {
+            cron_id: String(args.cron_id),
+            website_id: String(args.website_id),
+            server_id: String(args.server_id),
+            server_label: String(args.server_label ?? ''),
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: `Delete cron job ${args.cron_id}.`,
+    }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();

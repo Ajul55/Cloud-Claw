@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { Client as SSHClient } from 'ssh2';
 import { env } from '../config/env.js';
+import { getUserByPlatformId, getDecryptedSshKey } from '../services/user_service.js';
 
 let cachedKey: Buffer | null = null;
 try {
@@ -29,6 +30,24 @@ const NON_RETRYABLE_ERRORS = [
 
 const MAX_OUTPUT_BYTES = 50_000;
 
+/**
+ * Load and decrypt the SSH key pair for a specific user.
+ * Returns null if the user has not configured an SSH key via /setkey.
+ */
+export async function loadUserSshKey(
+    platform: 'slack' | 'telegram',
+    platformId: string
+): Promise<{ privateKey: Buffer; publicKey: string } | null> {
+    const user = await getUserByPlatformId(platform, platformId);
+    if (!user) return null;
+    const decrypted = getDecryptedSshKey(user);
+    if (!decrypted || !user.ssh_public_key) return null;
+    return {
+        privateKey: Buffer.from(decrypted),
+        publicKey: user.ssh_public_key,
+    };
+}
+
 export function sanitizeDomain(domain: string): string {
     if (!/^[a-zA-Z0-9.-]+$/.test(domain)) {
         throw new Error(`Invalid domain format — only alphanumeric, dots, and hyphens allowed: ${domain}`);
@@ -48,11 +67,12 @@ function sleep(ms: number): Promise<void> {
 async function executeSSHCommand(
     host: string,
     command: string,
-    options: { user?: string; port?: number; timeoutMs?: number } = {}
+    options: { user?: string; port?: number; timeoutMs?: number; privateKey?: Buffer } = {}
 ): Promise<string> {
     return new Promise((resolve, reject) => {
-        if (!SSH_PRIVATE_KEY) {
-            return reject(new Error('SSH_PRIVATE_KEY_PATH is not configured in .env'));
+        const key = options.privateKey ?? SSH_PRIVATE_KEY;
+        if (!key) {
+            return reject(new Error('SSH private key is not configured — set SSH_PRIVATE_KEY_PATH in .env or run /setkey'));
         }
 
         const conn = new SSHClient();
@@ -99,7 +119,7 @@ async function executeSSHCommand(
                 host,
                 port: options?.port ?? env.SSH_PORT,
                 username: options?.user ?? env.SSH_USER,
-                privateKey: SSH_PRIVATE_KEY,
+                privateKey: key,
                 readyTimeout: 10_000,
             });
         } catch (err) {
@@ -112,7 +132,7 @@ async function executeSSHCommand(
 export async function sshExec(
     host: string,
     command: string,
-    options: { retries?: number; timeoutMs?: number; timeout?: number; port?: number; user?: string } = {}
+    options: { retries?: number; timeoutMs?: number; timeout?: number; port?: number; user?: string; privateKey?: Buffer } = {}
 ): Promise<string> {
     const retries = options.retries ?? MAX_RETRIES;
     const timeoutMs = options.timeoutMs ?? ((options.timeout ?? 30) * 1000);
@@ -123,6 +143,7 @@ export async function sshExec(
                 port: options.port ?? 22,
                 user: options.user ?? 'root',
                 timeoutMs,
+                privateKey: options.privateKey,
             });
             if (attempt > 1) {
                 console.log(`[ssh] Connected on attempt ${attempt}/${retries} for ${host}`);

@@ -42,10 +42,15 @@ async function main(): Promise<void> {
     }
 
     // 3. Slack (primary)
-    const slackAppCandidate = createSlackApp();
-    const slackApp = await startSlackApp(slackAppCandidate);
-    if (!slackApp) {
-        console.warn('[Slack] Disabled — startup failed. Running without Slack.');
+    let slackApp: Awaited<ReturnType<typeof createSlackApp>> | null = null;
+    if (env.SLACK_BOT_TOKEN && env.SLACK_APP_TOKEN) {
+        const slackAppCandidate = createSlackApp();
+        slackApp = await startSlackApp(slackAppCandidate);
+        if (!slackApp) {
+            console.warn('[Slack] Disabled — startup failed. Running without Slack.');
+        }
+    } else {
+        console.log('[Slack] Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN — skipping');
     }
 
     console.log('');
