@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { Client as SSHClient } from 'ssh2';
 import { env } from '../config/env.js';
 import { getUserByPlatformId, getDecryptedSshKey } from '../services/user_service.js';
+import { getCloudstickUser } from '../api/cloudstick_context.js';
 
 let cachedKey: Buffer | null = null;
 try {
@@ -16,6 +17,130 @@ try {
 export const SSH_PRIVATE_KEY: Buffer | null = cachedKey;
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 2000;
+
+// ─── SSH Connection Pool (Multiplexing) ───────────────────────────────────────
+// Reuses persistent connections instead of creating new TCP+SSH auth each time.
+// This prevents rate-limit / fail2ban triggers from repeated connection attempts.
+
+interface PooledConnection {
+    conn: SSHClient;
+    inUse: boolean;
+    lastUsed: number;
+}
+
+const MAX_IDLE_MS = 60_000; // Close idle connections after 60 seconds
+const MAX_CONNECTIONS_PER_HOST = 2;
+
+const connectionPool = new Map<string, PooledConnection[]>();
+
+function poolKey(host: string, port: number, user: string): string {
+    return `${user}@${host}:${port}`;
+}
+
+function releaseConnection(host: string, port: number, user: string, conn: SSHClient): void {
+    const hostKey = poolKey(host, port, user);
+    const pool = connectionPool.get(hostKey);
+    if (!pool) return;
+    const pooled = pool.find(p => p.conn === conn);
+    if (pooled) {
+        pooled.inUse = false;
+        pooled.lastUsed = Date.now();
+    }
+}
+
+function closePooledConn(pooled: PooledConnection): void {
+    try { pooled.conn.end(); } catch {}
+}
+
+function cleanupPool(hostKey: string): void {
+    const pool = connectionPool.get(hostKey);
+    if (!pool) return;
+    const now = Date.now();
+    const active = pool.filter(p => {
+        if (!p.inUse && (now - p.lastUsed) > MAX_IDLE_MS) {
+            closePooledConn(p);
+            return false;
+        }
+        return true;
+    });
+    if (active.length === 0) {
+        connectionPool.delete(hostKey);
+    } else {
+        connectionPool.set(hostKey, active);
+    }
+}
+
+async function getPooledConnection(
+    host: string,
+    port: number,
+    user: string,
+    key: Buffer
+): Promise<SSHClient> {
+    const hostKey = poolKey(host, port, user);
+
+    // Clean up old connections first
+    cleanupPool(hostKey);
+
+    const pool = connectionPool.get(hostKey) ?? [];
+
+    // Try to reuse an idle, healthy connection
+    for (const pooled of pool) {
+        if (!pooled.inUse) {
+            pooled.inUse = true;
+            pooled.lastUsed = Date.now();
+            console.log(`[ssh] Reusing pooled connection for ${hostKey}`);
+            return pooled.conn;
+        }
+    }
+
+    // Need a new connection — respect per-host limit
+    if (pool.length >= MAX_CONNECTIONS_PER_HOST) {
+        // Wait for a connection to become available
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return getPooledConnection(host, port, user, key);
+    }
+
+    console.log(`[ssh] Creating new SSH connection for ${hostKey}`);
+    const conn = await connectSSH(host, port, user, key);
+    const pooled: PooledConnection = { conn, inUse: true, lastUsed: Date.now() };
+    pool.push(pooled);
+    connectionPool.set(hostKey, pool);
+    return conn;
+}
+
+function connectSSH(host: string, port: number, user: string, key: Buffer): Promise<SSHClient> {
+    return new Promise((resolve, reject) => {
+        const conn = new SSHClient();
+        const timer = setTimeout(() => {
+            conn.end();
+            reject(new Error(`SSH connect timed out for ${host}:${port}`));
+        }, 15_000);
+
+        conn.on('ready', () => {
+            clearTimeout(timer);
+            resolve(conn);
+        });
+        conn.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+
+        conn.connect({
+            host,
+            port,
+            username: user,
+            privateKey: key,
+            readyTimeout: 10_000,
+        });
+    });
+}
+
+// Periodic pool cleanup — run every 30 seconds
+setInterval(() => {
+    for (const hostKey of connectionPool.keys()) {
+        cleanupPool(hostKey);
+    }
+}, 30_000);
 
 const RETRYABLE_ERRORS = [
     'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET',
@@ -69,63 +194,70 @@ async function executeSSHCommand(
     command: string,
     options: { user?: string; port?: number; timeoutMs?: number; privateKey?: Buffer } = {}
 ): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const key = options.privateKey ?? SSH_PRIVATE_KEY;
-        if (!key) {
-            return reject(new Error('SSH private key is not configured — set SSH_PRIVATE_KEY_PATH in .env or run /setkey'));
+    // Priority: explicit privateKey > per-user DB key > .env cached key
+    let key = options.privateKey ?? null;
+
+    if (!key) {
+        // Try per-user SSH key from current Cloudstick context
+        const ctx = getCloudstickUser();
+        if (ctx?.ssh_private_key) {
+            try {
+                const decrypted = getDecryptedSshKey(ctx);
+                if (decrypted) {
+                    key = Buffer.from(decrypted);
+                    console.log(`[ssh] Using per-user SSH key for ${host}`);
+                }
+            } catch (err) {
+                console.warn(`[ssh] Failed to decrypt per-user SSH key, falling back to .env key`, err);
+            }
         }
+    }
 
-        const conn = new SSHClient();
+    // Fallback to .env cached key
+    if (!key) {
+        key = SSH_PRIVATE_KEY;
+    }
+
+    if (!key) {
+        throw new Error('SSH private key is not configured — set SSH_PRIVATE_KEY_PATH in .env or run /setkey');
+    }
+
+    const port = options.port ?? env.SSH_PORT ?? 22;
+    const user = options.user ?? env.SSH_USER ?? 'root';
+    const timeoutMs = options.timeoutMs ?? 30_000;
+
+    // Use connection pool for multiplexing
+    const conn = await getPooledConnection(host, port, user, key);
+
+    return new Promise((resolve, reject) => {
         let output = '';
-        const timeoutMs = options.timeoutMs ?? 30_000;
-
         const timer = setTimeout(() => {
-            conn.destroy();
+            releaseConnection(host, port, user, conn);
             reject(new Error(`SSH command timed out after ${timeoutMs}ms: ${command}`));
         }, timeoutMs);
 
-        conn
-            .on('ready', () => {
-                conn.exec(command, (err, stream) => {
-                    if (err) {
-                        clearTimeout(timer);
-                        conn.end();
-                        return reject(err);
-                    }
-                    stream
-                        .on('close', () => {
-                            clearTimeout(timer);
-                            conn.end();
-                            if (output.length > MAX_OUTPUT_BYTES) {
-                                output = output.slice(0, MAX_OUTPUT_BYTES) + '\n...[truncated at 50KB]';
-                            }
-                            resolve(output.trim());
-                        })
-                        .on('data', (data: Buffer) => {
-                            output += data.toString();
-                        })
-                        .stderr.on('data', (data: Buffer) => {
-                            output += data.toString();
-                        });
-                });
-            })
-            .on('error', (err) => {
+        conn.exec(command, (err, stream) => {
+            if (err) {
                 clearTimeout(timer);
-                reject(err);
-            });
-
-        try {
-            conn.connect({
-                host,
-                port: options?.port ?? env.SSH_PORT,
-                username: options?.user ?? env.SSH_USER,
-                privateKey: key,
-                readyTimeout: 10_000,
-            });
-        } catch (err) {
-            clearTimeout(timer);
-            reject(err);
-        }
+                releaseConnection(host, port, user, conn);
+                return reject(err);
+            }
+            stream
+                .on('close', () => {
+                    clearTimeout(timer);
+                    releaseConnection(host, port, user, conn);
+                    if (output.length > MAX_OUTPUT_BYTES) {
+                        output = output.slice(0, MAX_OUTPUT_BYTES) + '\n...[truncated at 50KB]';
+                    }
+                    resolve(output.trim());
+                })
+                .on('data', (data: Buffer) => {
+                    output += data.toString();
+                })
+                .stderr.on('data', (data: Buffer) => {
+                    output += data.toString();
+                });
+        });
     });
 }
 

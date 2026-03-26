@@ -505,6 +505,10 @@ export async function runAgentLoop(
     const requiresCloudflarePurge = intent.toolHint === 'cloudflare_cache_purge';
     const requiresDomainDiagnosis = intent.toolHint === 'diagnose_domain';
     const requiresNginx = intent.toolHint === 'diagnose_nginx';
+    const requiresSslCheck = intent.toolHint === 'check_ssl_api';
+    const requiresWebsiteList = intent.toolHint === 'get_cloudstick_websites';
+    const requiresServerDetails = intent.toolHint === 'get_server_details';
+    const requiresWpDetails = intent.toolHint === 'get_wordpress_details';
 
     // ─── Session trimming & Sanitation ─────────────────────────────────────────
     // Sanitize any existing corrupted history (e.g., from previous bad trims)
@@ -668,6 +672,26 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 ? { type: 'function', function: { name: 'diagnose_domain' } }
                 : 'auto';
             console.log('[loop] Forcing tool_choice: diagnose_domain (domain routing query detected)');
+        } else if (requiresSslCheck && iteration === 1 && !hasReceipt(executionReceipts, 'check_ssl_api', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'check_ssl_api' } }
+                : 'auto';
+            console.log('[loop] Forcing tool_choice: check_ssl_api (SSL status query detected)');
+        } else if (requiresWebsiteList && iteration === 1 && !hasReceipt(executionReceipts, 'get_cloudstick_websites', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'get_cloudstick_websites' } }
+                : 'auto';
+            console.log('[loop] Forcing tool_choice: get_cloudstick_websites (website listing query detected)');
+        } else if (requiresServerDetails && iteration === 1 && !hasReceipt(executionReceipts, 'get_server_details', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'get_server_details' } }
+                : 'auto';
+            console.log('[loop] Forcing tool_choice: get_server_details (server details query detected)');
+        } else if (requiresWpDetails && iteration === 1 && !hasReceipt(executionReceipts, 'get_wordpress_details', true, RECEIPT_FRESHNESS_MS)) {
+            toolChoice = canRequireTool
+                ? { type: 'function', function: { name: 'get_wordpress_details' } }
+                : 'auto';
+            console.log('[loop] Forcing tool_choice: get_wordpress_details (WordPress details query detected)');
         } else if (requiresNginx && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
             // Fix #8: soft suggestion — require A tool but don't mandate which one
             toolChoice = shouldRequireTool ? 'required' : 'auto';

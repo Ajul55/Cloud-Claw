@@ -13,7 +13,7 @@ export const create_nginx_vhost: Tool = {
     'Use this when the user wants to: add a new site, set up a reverse proxy, ' +
     'point a domain to an IP/port, or create a new vhost. ' +
     'Requires: host, domain, and one of: static_root (for static sites) ' +
-    'or proxy_pass (for reverse proxy e.g. "http://65.20.82.177/api"). ' +
+    'or proxy_pass (for reverse proxy e.g. "http://65.20.83.180/api"). ' +
     'This tool will trigger approval before writing.',
   parameters: {
     type: 'object',
@@ -28,7 +28,7 @@ export const create_nginx_vhost: Tool = {
       },
       proxy_pass: {
         type: 'string',
-        description: 'Backend URL for reverse proxy e.g. http://65.20.82.177/api',
+        description: 'Backend URL for reverse proxy e.g. http://65.20.83.180/api',
       },
       static_root: {
         type: 'string',
@@ -55,7 +55,7 @@ export const create_nginx_vhost: Tool = {
       return {
         success: false,
         output: 'Error: either proxy_pass or static_root is required. ' +
-          'proxy_pass example: http://65.20.82.177/api — ' +
+          'proxy_pass example: http://65.20.83.180/api — ' +
           'static_root example: /var/www/mysite',
       };
     }

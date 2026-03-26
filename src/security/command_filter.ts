@@ -67,32 +67,74 @@ const LANE2_WHITELIST: Array<[RegExp, string]> = [
     [/^(sudo\s+)?top\s+-bn\s*1(\s+\|\s*head\s+-\d+)?$/i, 'top (single snapshot)'],
     // Service status
     [/^(sudo\s+)?systemctl\s+status\s+[\w@.-]+(\s+--no-pager)?(\s+-l)?(\s+2>&1)?(\s+\|\s*sed\s+-n\s+'1,\d+p')?$/i, 'systemctl status [service]'],
-    [/^(sudo\s+)?systemctl\s+is-active\s+[\w@.-]+$/i, 'systemctl is-active'],
+    [/^(sudo\s+)?systemctl\s+is-active\s+[\w@.-]+(\s+2>&1)?(\s+\|\|\s+true)?$/i, 'systemctl is-active'],
+    [/^(sudo\s+)?systemctl\s+is-enabled\s+[\w@.-]+(\s+2>&1)?$/i, 'systemctl is-enabled'],
     [/^(sudo\s+)?systemctl\s+list-units(\s+--type=\w+)?(\s+--state=\w+)?(\s+--no-pager)?$/i, 'systemctl list-units'],
+    [/^(sudo\s+)?systemctl\s+list-unit-files(\s+--type=\w+)?(\s+--no-pager)?(\s+\|\s*grep\s+[\w.-]+)?$/i, 'systemctl list-unit-files'],
     // Nginx
     [/^(sudo\s+)?nginx\s+-t(\s+2>&1)?$/i, 'nginx -t (config test)'],
     [/^(sudo\s+)?nginx\s+-T(\s+2>&1)?(\s+\|\s*head\s+-\d+)?$/i, 'nginx -T (dump config)'],
+    [/^(sudo\s+)?nginx\s+-v(\s+2>&1)?$/i, 'nginx -v (version)'],
+    [/^(sudo\s+)?nginx\s+-V(\s+2>&1)?$/i, 'nginx -V (version + config)'],
+    // Package & binary checks (which, command -v, dpkg, apt)
+    [/^(sudo\s+)?which\s+[\w.-]+$/i, 'which (locate binary)'],
+    [/^(sudo\s+)?command\s+-v\s+[\w.-]+$/i, 'command -v (locate command)'],
+    [/^(sudo\s+)?type\s+[\w.-]+$/i, 'type (locate command)'],
+    [/^(sudo\s+)?dpkg\s+-l(\s+[\w.*-]+)?(\s+2>&1)?(\s+\|\s*(grep|head|tail)\s+(-[a-zA-Z]+\s+)*[\w.*-]+)?$/i, 'dpkg -l (list packages)'],
+    [/^(sudo\s+)?dpkg\s+-s\s+[\w.-]+(\s+2>&1)?$/i, 'dpkg -s (package status)'],
+    [/^(sudo\s+)?dpkg\s+--get-selections(\s+\|\s*grep\s+[\w.-]+)?$/i, 'dpkg --get-selections'],
+    [/^(sudo\s+)?apt\s+list(\s+--installed)?(\s+2>\/dev\/null)?(\s+\|\s*grep\s+[\w.*-]+)?$/i, 'apt list (list packages)'],
+    [/^(sudo\s+)?apt-cache\s+(show|search|policy)\s+[\w.-]+$/i, 'apt-cache (package info)'],
+    [/^(sudo\s+)?rpm\s+-q[a-z]*\s+[\w.-]+$/i, 'rpm query (package info)'],
     // Logs (read-only)
     [/^(sudo\s+)?tail\s+-n\s*\d+\s+\/var\/log\/[\w./-]+$/i, 'tail log file'],
     [/^(sudo\s+)?cat\s+\/var\/log\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'cat log file'],
     [/^(sudo\s+)?cat\s+\/etc\/nginx\/[\w./-]+$/i, 'cat nginx config'],
+    [/^(sudo\s+)?cat\s+\/etc\/[\w./-]+$/i, 'cat /etc/ config file'],
     [/^(sudo\s+)?head\s+-n?\s*\d+\s+\/var\/log\/[\w./-]+$/i, 'head log file'],
+    [/^(sudo\s+)?head\s+-n?\s*\d+\s+\/etc\/[\w./-]+$/i, 'head config file'],
     [/^(sudo\s+)?grep\s+(-[a-zA-Z]+\s+)*'[^']*'\s+\/var\/log\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'grep log file'],
+    [/^(sudo\s+)?grep\s+(-[a-zA-Z]+\s+)*'[^']*'\s+\/etc\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'grep config file'],
+    [/^(sudo\s+)?journalctl\s+(-[a-zA-Z]+\s+)*(--no-pager\s+)?(-u\s+[\w@.-]+\s*)?(-n\s*\d+\s*)?(\s+--since\s+"[^"]+")?((\s+2>&1)?(\s+\|\s*(head|tail)\s+-\d+)?)?$/i, 'journalctl (journal logs)'],
     // Crontab listing
     [/^(sudo\s+)?crontab\s+-l(\s+-u\s+[\w-]+)?$/i, 'crontab -l (list)'],
     // Process inspection
     [/^(sudo\s+)?ps\s+(aux|ef)(\s+\|\s*grep\s+(-[a-zA-Z]+\s+)*[\w.-]+)?(\s+\|\s*grep\s+-v\s+grep)?$/i, 'ps (process list)'],
+    [/^(sudo\s+)?pgrep\s+(-[a-zA-Z]+\s+)*[\w.-]+$/i, 'pgrep (find process)'],
     // Network
     [/^(sudo\s+)?netstat\s+-[a-z]+(\s+2>\/dev\/null)?(\s+\|\s*head\s+-\d+)?$/i, 'netstat'],
-    [/^(sudo\s+)?ss\s+-[a-z]+(\s+2>\/dev\/null)?(\s+\|\s*head\s+-\d+)?$/i, 'ss (socket stats)'],
+    [/^(sudo\s+)?ss\s+-[a-z]+(\s+2>\/dev\/null)?(\s+\|\s*(head|grep)\s+(-[a-zA-Z]+\s+)*[\w.-]*)?$/i, 'ss (socket stats)'],
+    [/^(sudo\s+)?dig\s+(\+short\s+)?[\w.-]+(\s+[A-Z]+)?$/i, 'dig (DNS lookup)'],
+    [/^(sudo\s+)?curl\s+-s[ILo]*\s+[\w:/.?&=-]+(\s+\|\s*(head|grep)\s+(-[a-zA-Z]+\s+)*[\w.-]*)?$/i, 'curl (HTTP check)'],
     // PHP version
     [/^(sudo\s+)?php[\d.]*\s+(--version|-v)$/i, 'php version check'],
     // Config reads (safe)
     [/^(sudo\s+)?nl\s+-ba\s+[\w/.+-]+(\s+\|\s*sed\s+-n\s+'\d+,\d+p')?$/i, 'nl (numbered cat)'],
     [/^(sudo\s+)?ls\s+(-[a-zA-Z]+\s+)*\/[\w./-]+$/i, 'ls (directory listing)'],
     [/^(sudo\s+)?wc\s+-l\s+[\w/.+-]+$/i, 'wc -l (line count)'],
+    [/^(sudo\s+)?find\s+\/etc\/[\w./-]*(\s+-name\s+"?[\w.*-]+"?)?(\s+-type\s+[fdl])?(\s+2>\/dev\/null)?(\s+\|\s*head\s+-\d+)?$/i, 'find in /etc/ (config discovery)'],
     // MySQL safe reads
     [/^(sudo\s+)?mysql\s+(-u\s*\w+\s+)?(--password=\S+\s+)?-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*"(\s+\w+)?$/i, 'mysql read-only query'],
+    // System identity
+    [/^(sudo\s+)?hostname(\s+-[fis])?$/i, 'hostname'],
+    [/^(sudo\s+)?uname(\s+-[a-z]+)*$/i, 'uname (system info)'],
+    [/^(sudo\s+)?whoami$/i, 'whoami'],
+    [/^(sudo\s+)?id(\s+\w+)?$/i, 'id (user info)'],
+    [/^(sudo\s+)?date(\s+[+-]+\S+)?$/i, 'date'],
+    [/^(sudo\s+)?timedatectl(\s+status)?$/i, 'timedatectl'],
+    // Docker (read-only)
+    [/^(sudo\s+)?docker\s+ps(\s+(-a|--all|--format\s+"[^"]+"))*$/i, 'docker ps (list containers)'],
+    [/^(sudo\s+)?docker\s+images(\s+--format\s+"[^"]+")?$/i, 'docker images'],
+    // Service version checks
+    [/^(sudo\s+)?[\w.-]+\s+(--version|-v|-V)(\s+2>&1)?$/i, 'version check (generic)'],
+    // SSL / certificate checks
+    [/^(sudo\s+)?openssl\s+s_client\s+-connect\s+[\w.-]+:\d+/i, 'openssl s_client (TLS check)'],
+    [/^(sudo\s+)?openssl\s+x509\s+-in\s+\/[\w./-]+\s+(-noout\s+)?(-text|-dates|-subject|-issuer|-serial)(\s+-noout)?$/i, 'openssl x509 (cert info)'],
+    [/^(sudo\s+)?certbot\s+certificates(\s+2>&1)?$/i, 'certbot certificates (list certs)'],
+    [/^(sudo\s+)?cat\s+\/etc\/(letsencrypt|ssl)\/[\w./-]+$/i, 'cat SSL/LE config'],
+    [/^(sudo\s+)?ls\s+(-[a-zA-Z]+\s+)*\/etc\/(letsencrypt|ssl)\/[\w./-]*$/i, 'ls SSL/LE directory'],
+    // WordPress CLI (read-only)
+    [/^(sudo\s+)?wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)(\s+--[\w=-]+)*(\s+--path=\/[\w./-]+)?$/i, 'wp-cli read-only commands'],
 ];
 
 // Lane 3: Emergency SSH Write Commands (require approval)
@@ -115,48 +157,55 @@ const SSH_KEY_INJECTION_PATTERNS: Array<[RegExp, string]> = [
 export function checkCommand(command: string): FilterResult {
     const trimmed = command.trim();
 
-    // 1. Hard block first (defense in depth)
+    // 1. Hard block first (defense in depth) — check ENTIRE command string
     for (const [pattern, reason] of BLOCKED_PATTERNS) {
         if (pattern.test(trimmed)) {
             return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
         }
     }
 
-    // 2. SSH key injection block
+    // 2. SSH key injection block — check ENTIRE command string
     for (const [pattern, reason] of SSH_KEY_INJECTION_PATTERNS) {
         if (pattern.test(trimmed)) {
             return { safe: false, reason };
         }
     }
 
-    // 3. Check Lane 2 (Read-Only) and Lane 3 (Emergency Write) whitelists
-    let isWhitelisted = false;
+    // 3. Split chained commands (&&, ||, ;) and check each sub-command
+    const subCommands = trimmed
+        .split(/\s*(?:&&|\|\||;)\s*/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
 
-    for (const [pattern] of LANE2_WHITELIST) {
-        // Enforce tail line limits for Lane 2
-        if (pattern.test(trimmed)) {
-            if (trimmed.startsWith('tail -n ')) {
-                const lines = parseInt(trimmed.split(' ')[2] ?? '0', 10);
-                if (lines > 200) {
-                    return { safe: false, reason: '🚫 BLOCKED: tail command exceeds maximum 200 lines limit' };
+    // Each sub-command must be in Lane 2 or Lane 3
+    for (const sub of subCommands) {
+        let subWhitelisted = false;
+
+        for (const [pattern] of LANE2_WHITELIST) {
+            if (pattern.test(sub)) {
+                if (sub.startsWith('tail -n ')) {
+                    const lines = parseInt(sub.split(' ')[2] ?? '0', 10);
+                    if (lines > 200) {
+                        return { safe: false, reason: '🚫 BLOCKED: tail command exceeds maximum 200 lines limit' };
+                    }
                 }
-            }
-            isWhitelisted = true;
-            break;
-        }
-    }
-
-    if (!isWhitelisted) {
-        for (const [pattern] of LANE3_WHITELIST) {
-            if (pattern.test(trimmed)) {
-                isWhitelisted = true;
+                subWhitelisted = true;
                 break;
             }
         }
-    }
 
-    if (!isWhitelisted) {
-        return { safe: false, reason: '🚫 BLOCKED: Command is not in the approved Lane 2 or Lane 3 whitelist. See Operating Manual.' };
+        if (!subWhitelisted) {
+            for (const [pattern] of LANE3_WHITELIST) {
+                if (pattern.test(sub)) {
+                    subWhitelisted = true;
+                    break;
+                }
+            }
+        }
+
+        if (!subWhitelisted) {
+            return { safe: false, reason: `🚫 BLOCKED: Command is not in the approved Lane 2 or Lane 3 whitelist. See Operating Manual.` };
+        }
     }
 
     return { safe: true };

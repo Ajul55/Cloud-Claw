@@ -2,7 +2,7 @@ import { getLLMClient } from '../llm/provider.js';
 
 export interface Intent {
     requiresTool: boolean;
-    toolHint: 'diagnose_nginx' | 'diagnose_domain' | 'cloudflare_cache_purge' | 'diagnose_services' | 'execute_ssh_command' | 'check_cloudstick_connection' | 'none';
+    toolHint: 'diagnose_nginx' | 'diagnose_domain' | 'cloudflare_cache_purge' | 'diagnose_services' | 'execute_ssh_command' | 'check_cloudstick_connection' | 'check_ssl_api' | 'get_cloudstick_websites' | 'get_server_details' | 'get_wordpress_details' | 'none';
     isAudit: boolean;
     targetServer: string;
     domains: string[];
@@ -22,7 +22,7 @@ Analyze the user's message and return a strictly typed JSON object matching this
 
 {
   "requiresTool": boolean, // Does this request need server read/write action to fulfill? (True for fixes, diagnostics. False for general concepts)
-  "toolHint": "diagnose_nginx" | "diagnose_domain" | "cloudflare_cache_purge" | "diagnose_services" | "execute_ssh_command" | "check_cloudstick_connection" | "none", // Best tool to start with
+  "toolHint": "diagnose_nginx" | "diagnose_domain" | "cloudflare_cache_purge" | "diagnose_services" | "execute_ssh_command" | "check_cloudstick_connection" | "check_ssl_api" | "get_cloudstick_websites" | "get_server_details" | "get_wordpress_details" | "none", // Best tool to start with
   "isAudit": boolean, // Is the user just asking for a status check/audit without making changes?
   "targetServer": string, // Did they specify a server? Return the exact server IP, hostname, or label. Return "unknown" if not specified.
   "domains": string[], // List of real hostnames mentioned (e.g. "example.com"). NO IP addresses, NO version strings (e.g. "v2.0"), NO file extensions masquerading as domains (e.g. ".ts", ".js", ".conf").
@@ -37,6 +37,18 @@ Output: {"requiresTool":true,"toolHint":"diagnose_domain","isAudit":false,"targe
 
 User: "is cloudstick connected?"
 Output: {"requiresTool":true,"toolHint":"check_cloudstick_connection","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+
+User: "check SSL status" or "is SSL installed?"
+Output: {"requiresTool":true,"toolHint":"check_ssl_api","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+
+User: "list websites" or "what websites are on the server?"
+Output: {"requiresTool":true,"toolHint":"get_cloudstick_websites","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+
+User: "server details" or "what PHP version is running?"
+Output: {"requiresTool":true,"toolHint":"get_server_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+
+User: "wordpress details" or "what WP version?" or "list plugins"
+Output: {"requiresTool":true,"toolHint":"get_wordpress_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
 
 User: "fix nginx on test"
 Output: {"requiresTool":true,"toolHint":"diagnose_nginx","isAudit":false,"targetServer":"test","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}

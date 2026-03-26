@@ -32,6 +32,11 @@ import { listCronJobsTool, createCronJobTool, deleteCronJobTool } from './manage
 import { checkCloudstickConnectionTool } from './check_cloudstick_connection.js';
 import { getCloudstickAccountDetailsTool } from './get_cloudstick_account_details.js';
 import { getCloudstickServersTool } from './get_cloudstick_servers.js';
+import { getCloudstickWebsitesTool } from './get_cloudstick_websites.js';
+import { getServerDetailsTool } from './get_server_details.js';
+import { getWordpressDetailsTool } from './get_wordpress_details.js';
+import { manageCloudflareDnsTool } from './manage_cloudflare_dns.js';
+import { manageWebsiteSettingsTool } from './manage_website_settings.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -74,6 +79,11 @@ const ALL_TOOLS: Tool[] = [
     checkCloudstickConnectionTool,
     getCloudstickAccountDetailsTool,
     getCloudstickServersTool,
+    getCloudstickWebsitesTool,
+    getServerDetailsTool,
+    getWordpressDetailsTool,
+    manageCloudflareDnsTool,
+    manageWebsiteSettingsTool,
 ];
 
 /** Map for O(1) lookup by name */

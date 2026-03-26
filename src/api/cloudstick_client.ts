@@ -76,6 +76,26 @@ export class CloudstickApiClient {
         return this.request({ method: 'GET', url: `/serverslist/byuser/users/${userId}` });
     }
 
+    /** Get full server details by ID */
+    public async getServerDetails(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get server activity log */
+    public async getServerActivity(serverId: string, userId: string, params?: { page?: number; limit?: number; search?: string; status?: string; activity_type?: string; duration?: string }) {
+        return this.request({ method: 'GET', url: `/activity/servers/${serverId}/users/${userId}`, params });
+    }
+
+    /** List all websites for a specific server */
+    public async listWebsitesByServer(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/list/websites/servers/${serverId}/users/${userId}` });
+    }
+
+    /** List website subdomains */
+    public async listWebsiteSubdomains(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/list/website-subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
     /** Reboot a server */
     public async rebootServer(serverId: string, userId: string) {
         return this.request({ method: 'GET', url: `/reboot/servers/${serverId}/users/${userId}` });
@@ -449,6 +469,264 @@ export class CloudstickApiClient {
     }
     public async switchPhpVersion(websiteId: string, serverId: string, userId: string, data: { php_version: string }) {
         return this.request({ method: 'POST', url: `/php/switch/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 9. WordPress Management
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get WordPress site details */
+    public async getWordpressDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/details/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress plugin count */
+    public async getWpPluginCount(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/plugins/count/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress version */
+    public async getWpVersion(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/version/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress users */
+    public async getWpUsers(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/wpusers/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress users count */
+    public async getWpUsersCount(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/users/count/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress magic login link */
+    public async getWpMagicLink(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/magiclink/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress site URLs */
+    public async getWpUrls(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/urls/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Toggle WordPress maintenance mode */
+    public async toggleWpMaintenanceMode(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/wordpress/manager/maintanance/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Toggle WordPress debug mode */
+    public async toggleWpDebugMode(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/wordpress/manager/debug/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Update WordPress search index */
+    public async updateWpSearchIndex(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/wordpress/manager/searchindex/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** List WordPress plugins for a site */
+    public async listWpPlugins(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/wpusers/${websiteId}/plugins/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 10. Website Management (suspend, rebuild, settings)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Suspend a website */
+    public async suspendWebsite(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/suspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Unsuspend a website */
+    public async unsuspendWebsite(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/unsuspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Rebuild a website */
+    public async rebuildWebsite(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/rebuild/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Change website stack type (e.g. nginx, apache) */
+    public async changeStackType(websiteId: string, serverId: string, userId: string, data: { stack_type: string }) {
+        return this.request({ method: 'PATCH', url: `/changestack/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Change website PHP config */
+    public async changePhpConfig(websiteId: string, serverId: string, userId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'PATCH', url: `/changephpconfig/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Change website public path */
+    public async changePublicPath(websiteId: string, serverId: string, userId: string, data: { public_path: string }) {
+        return this.request({ method: 'PATCH', url: `/changepublicpath/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Remove domain from website */
+    public async removeDomain(websiteId: string, serverId: string, userId: string, data?: { domain?: string }) {
+        return this.request({ method: 'DELETE', url: `/removedomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 11. Cloudflare DNS Management
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List Cloudflare zones */
+    public async listCloudflareZones(userId: string, params?: { account_label?: string; page?: number; limit?: number; search?: string }) {
+        return this.request({ method: 'GET', url: `/listzones/users/${userId}`, params });
+    }
+
+    /** List Cloudflare accounts for user */
+    public async listCloudflareAccounts(userId: string) {
+        return this.request({ method: 'GET', url: `/listcloudflareproviders/users/${userId}` });
+    }
+
+    /** List DNS records */
+    public async listDnsRecords(userId: string, params?: { account_label?: string; zone?: string; type?: string; page?: number; limit?: number; search?: string }) {
+        return this.request({ method: 'GET', url: `/dnsrecords/users/${userId}`, params });
+    }
+
+    /** Create DNS record */
+    public async createDnsRecord(userId: string, data: { account_label: string; zone: string; type: string; name: string; content: string; ttl?: number; proxied?: boolean }) {
+        return this.request({ method: 'POST', url: `/dnsrecords/users/${userId}`, data });
+    }
+
+    /** Create Cloudflare zone */
+    public async createCloudflareZone(userId: string, data: { account_label: string; domain: string }) {
+        return this.request({ method: 'POST', url: `/createzone/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 12. Email (extended)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Update email account quota */
+    public async updateEmailQuota(websiteId: string, serverId: string, userId: string, data: { quota: number }) {
+        return this.request({ method: 'PATCH', url: `/email/quota/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Forward email */
+    public async forwardEmail(websiteId: string, serverId: string, userId: string, data: { name: string; forwardemail: string }) {
+        return this.request({ method: 'POST', url: `/email/forward/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** List forwarded emails */
+    public async listForwardedEmails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/email/forward/list/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get email configuration */
+    public async getEmailConfig(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/email/configure/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Set email configuration */
+    public async setEmailConfig(websiteId: string, serverId: string, userId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'POST', url: `/email/setconfig/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 13. MySQL Management
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get MySQL remote access status */
+    public async getMysqlRemoteAccessStatus(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/status/mysql/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Update MySQL root password */
+    public async updateMysqlRootPassword(serverId: string, userId: string, data: { password: string; confirm_password: string }) {
+        return this.request({ method: 'PATCH', url: `/mysql-password/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Toggle MySQL remote access */
+    public async toggleMysqlRemoteAccess(serverId: string, userId: string, data: { remote_access: boolean }) {
+        return this.request({ method: 'PATCH', url: `/mysql-access/remote/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 14. App Details (read-only)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get CustomPHP details */
+    public async getCustomPhpDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/customphp/details/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get Laravel details */
+    public async getLaravelDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/laravel/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** View Laravel .env file */
+    public async viewLaravelEnv(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/laravel/view-envfile/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Edit Laravel .env file */
+    public async editLaravelEnv(websiteId: string, serverId: string, userId: string, data: { env_content: string }) {
+        return this.request({ method: 'PATCH', url: `/laravel/edit-envfile/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get ProxyApp details */
+    public async getProxyAppDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/proxyapp/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WooCommerce details */
+    public async getWooCommerceDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/woocommerce/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get Joomla details */
+    public async getJoomlaDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/joomla/details/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get Moodle details */
+    public async getMoodleDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/moodle/details/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get Prestashop details */
+    public async getPrestashopDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/prestashop/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get PHPMyAdmin details */
+    public async getPhpMyAdminDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/phpmyadmin/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get Roundcube Webmail details */
+    public async getRoundcubeDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/roundcubewebmail/details/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get MediaWiki details */
+    public async getMediaWikiDetails(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/details/mediawiki/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 15. Third-Party Integrations
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List third-party integrations */
+    public async listThirdPartyIntegrations(userId: string) {
+        return this.request({ method: 'GET', url: `/thirdpartyintegrations/users/${userId}` });
+    }
+
+    /** Create third-party integration */
+    public async createThirdPartyIntegration(userId: string, data: { label: string; username: string; service: string; secret_key: string }) {
+        return this.request({ method: 'POST', url: `/thirdpartyintegrations/users/${userId}`, data });
+    }
+
+    /** Update third-party integration */
+    public async updateThirdPartyIntegration(integrationId: string, userId: string, data: { secret_key?: string }) {
+        return this.request({ method: 'PATCH', url: `/thirdpartyintegrations/${integrationId}/users/${userId}`, data });
     }
 }
 

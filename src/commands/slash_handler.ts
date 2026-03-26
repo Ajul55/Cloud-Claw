@@ -172,7 +172,12 @@ async function handleSetKey(
         return;
     }
 
-    if (args.length < 3) {
+    // Reconstruct the full input (args were split on whitespace)
+    const fullInput = args.slice(1).join(' ');
+
+    // Extract private key block: -----BEGIN ... PRIVATE KEY----- ... -----END ... PRIVATE KEY-----
+    const privKeyMatch = fullInput.match(/(-----BEGIN[A-Z\s]+PRIVATE KEY-----[\s\S]*?-----END[A-Z\s]+PRIVATE KEY-----)/);
+    if (!privKeyMatch) {
         await replyFn(
             '🔐 *SSH Key Setup*\n\n' +
             'To store your SSH private key, paste your keys in this format:\n' +
@@ -186,16 +191,21 @@ async function handleSetKey(
         return;
     }
 
-    const [, privateKey, ...publicKeyParts] = args;
-    const publicKey = publicKeyParts.join(' ');
+    const privateKey = privKeyMatch[1].trim();
 
-    if (!privateKey || !publicKey) {
-        await replyFn('❌ Both private key and public key are required.\nUsage: `/setkey <private_key> <public_key>`');
+    // Everything after the private key block is the public key
+    const afterPrivateKey = fullInput.substring(fullInput.indexOf(privKeyMatch[0]) + privKeyMatch[0].length).trim();
+    const publicKey = afterPrivateKey || '';
+
+    if (!publicKey) {
+        await replyFn('❌ Public key not found after private key block.\nUsage: `/setkey <private_key> <public_key>`');
         return;
     }
 
     try {
-        await setUserSshKey(platform, userId, privateKey.trim(), publicKey.trim());
+        // Normalize the private key: ensure proper line breaks in the base64 body
+        const normalizedPrivateKey = normalizeOpenSshKey(privateKey);
+        await setUserSshKey(platform, userId, normalizedPrivateKey, publicKey.trim());
         await replyFn(
             '✅ *SSH key configured!*\n\n' +
             `Platform: \`${platform}\`\n\n` +
@@ -207,6 +217,36 @@ async function handleSetKey(
         console.error('[SlashHandler] /setkey error:', err);
         await replyFn(`❌ Failed to store SSH key: ${err instanceof Error ? err.message : String(err)}`);
     }
+}
+
+/**
+ * Normalize an OpenSSH private key pasted from Slack.
+ * Slack collapses newlines into spaces, so we need to reconstruct
+ * proper PEM-style line breaks (70-char base64 lines).
+ */
+function normalizeOpenSshKey(raw: string): string {
+    // Match header and footer
+    const headerMatch = raw.match(/^(-----BEGIN[A-Z\s]+PRIVATE KEY-----)/);
+    const footerMatch = raw.match(/(-----END[A-Z\s]+PRIVATE KEY-----)$/);
+    if (!headerMatch || !footerMatch) return raw;
+
+    const header = headerMatch[1];
+    const footer = footerMatch[1];
+
+    // Extract the base64 body between header and footer
+    let body = raw
+        .replace(header, '')
+        .replace(footer, '')
+        .replace(/\s+/g, ''); // Remove all whitespace from the base64 body
+
+    // Split into 70-char lines (standard PEM format)
+    const lines: string[] = [];
+    while (body.length > 0) {
+        lines.push(body.substring(0, 70));
+        body = body.substring(70);
+    }
+
+    return `${header}\n${lines.join('\n')}\n${footer}\n`;
 }
 
 async function handleStatus(replyFn: ReplyFn) {

@@ -49,8 +49,8 @@ export const issueSSLTool: Tool = {
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
-            const status = await client.getSSLStatus(String(args.website_id), String(args.server_id), userId());
-            return JSON.stringify(status);
+            const details = await client.getServerDetails(String(args.server_id), userId());
+            return JSON.stringify({ ssl_installed: details?.message?.is_ssl_installed ?? 'unknown' });
         } catch { return '{}'; }
     },
     execute: async (args) => {
@@ -61,11 +61,9 @@ export const issueSSLTool: Tool = {
                 { authorisation: 'HTTP', access: 'HTTPS', brotli_enabled: true }
             );
 
-            // Post-issue verification
-            const status = await client.getSSLStatus(String(args.website_id), String(args.server_id), userId());
             return {
                 success: true,
-                output: `SSL certificate issued.\nAPI response: ${JSON.stringify(result, null, 2)}\nCurrent SSL status: ${JSON.stringify(status, null, 2)}`
+                output: `SSL certificate issued successfully.\nAPI response: ${JSON.stringify(result, null, 2)}`
             };
         } catch (err) {
             return { success: false, output: `SSL issuance failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -112,8 +110,8 @@ export const renewSSLApiTool: Tool = {
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
-            const status = await client.getSSLStatus(String(args.website_id), String(args.server_id), userId());
-            return JSON.stringify(status);
+            const details = await client.getServerDetails(String(args.server_id), userId());
+            return JSON.stringify({ ssl_installed: details?.message?.is_ssl_installed ?? 'unknown' });
         } catch { return '{}'; }
     },
     execute: async (args) => {
@@ -145,11 +143,9 @@ export const renewSSLApiTool: Tool = {
             // Track successful renewal for race-condition guard
             recentRenewals.set(renewalKey, Date.now());
 
-            // Post-renewal verification
-            const status = await client.getSSLStatus(websiteId, serverId, userId());
             return {
                 success: true,
-                output: `SSL certificate renewed.\nAPI response: ${JSON.stringify(result, null, 2)}\nCurrent SSL status: ${JSON.stringify(status, null, 2)}`
+                output: `SSL certificate renewed successfully.\nAPI response: ${JSON.stringify(result, null, 2)}`
             };
         } catch (err) {
             return { success: false, output: `SSL renewal failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -255,24 +251,20 @@ export const checkSslApiTool: Tool = {
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            if (args.website_id) {
-                const status = await client.getSSLStatus(String(args.website_id), String(args.server_id), userId());
-                return { success: true, output: `SSL Status for Website ${args.website_id}:\n${JSON.stringify(status, null, 2)}` };
-            } else {
-                const response = await client.listServersByUser(userId());
-                const server = response?.message?.servers?.find((s: any) => String(s.id) === String(args.server_id));
-                if (!server) {
-                    return { success: false, output: `Server ID ${args.server_id} not found.` };
-                }
-                const sslInfo = {
-                    is_ssl_installed: server.is_ssl_installed,
-                    ssl_provider: server.ssl_provider,
-                    ssl_created_at: server.ssl_created_at,
-                    ssl_expired_at: server.ssl_expired_at,
-                    host_name: server.host_name,
-                };
-                return { success: true, output: `SSL Status for Server ${args.server_id}:\n${JSON.stringify(sslInfo, null, 2)}` };
+            // Use server details to get SSL info (legacy /ssl/status/ endpoint doesn't exist)
+            const response = await client.getServerDetails(String(args.server_id), userId());
+            const server = response?.message;
+            if (!server) {
+                return { success: false, output: `Server ID ${args.server_id} not found.` };
             }
+            const sslInfo = {
+                is_ssl_installed: server.is_ssl_installed,
+                ssl_provider: server.ssl_provider,
+                ssl_created_at: server.ssl_created_at,
+                ssl_expired_at: server.ssl_expired_at,
+                host_name: server.host_name,
+            };
+            return { success: true, output: `SSL Status for Server ${args.server_id}:\n${JSON.stringify(sslInfo, null, 2)}` };
         } catch (err) {
             return { success: false, output: `API check failed: ${err instanceof Error ? err.message : String(err)}` };
         }
