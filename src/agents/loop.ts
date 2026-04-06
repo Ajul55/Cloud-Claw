@@ -90,6 +90,11 @@ const SENSITIVE_PATTERNS = [
     /secret/i, /token/i, /\.env/i,
 ];
 
+// ─── Tools suppressed after an API tool succeeds ────────────────────────────
+// Tracks tools that should be blocked because a prior tool already handled the job.
+// Keyed by sessionId, cleared on each fresh user message.
+const suppressedToolsMap = new Map<string, Set<string>>();
+
 function containsInternalToolSyntax(text: string): boolean {
     return /\bfunctions\.[a-z_]+\s*\(/i.test(text)
         || /```(?:typescript|json)?[\s\S]*functions\.[a-z_]+\s*\(/i.test(text)
@@ -374,6 +379,9 @@ export async function runAgentLoop(
     onApproval: ApprovalFn,
     indicator?: StatusIndicator
 ): Promise<void> {
+    // 0. Clear any suppressed-tools state from prior turns in this session
+    suppressedToolsMap.delete(message.sessionId);
+
     // 1. Load or create session
     const session = await getSession(message.sessionId);
 
@@ -898,6 +906,18 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 continue;
             }
 
+            // ─── Suppression guard: block tools made redundant by a prior API tool ─
+            const suppressed = suppressedToolsMap.get(message.sessionId);
+            if (suppressed?.has(toolName)) {
+                console.warn(`[loop] SUPPRESSED: "${toolName}" is redundant after a prior API tool in this session`);
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    content: `BLOCKED: "${toolName}" is not needed — the Cloudstick API already handled this operation. Do not re-run this command.`,
+                });
+                continue;
+            }
+
             if (toolSupportsServerRouting(tool)) {
                 const requestedAllServers = String(toolArgs.server_label ?? '').trim().toLowerCase() === 'all'
                     || intent.targetServer === 'all';
@@ -1077,7 +1097,8 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             // Security check for any "command" argument
             const rawCommand = toolArgs.command as string | undefined;
             if (rawCommand) {
-                const filterResult = checkCommand(rawCommand);
+                const isWriteTool = toolName === 'execute_ssh_write';
+                const filterResult = checkCommand(rawCommand, isWriteTool);
                 if (!filterResult.safe) {
                     const blockMsg = filterResult.reason ?? 'Command blocked by safety filter';
                     messages.push({
@@ -1255,6 +1276,17 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         `${toolName}: ${JSON.stringify(toolArgs)}`,
                         toolName,
                     ).catch(err => console.warn('[loop] saveFix failed (non-fatal):', err));
+                }
+
+                // ─── Register suppressed tools after successful API tool ───────────
+                if (result.success && tool.suppressTools) {
+                    if (!suppressedToolsMap.has(message.sessionId)) {
+                        suppressedToolsMap.set(message.sessionId, new Set());
+                    }
+                    for (const suppressed of tool.suppressTools) {
+                        suppressedToolsMap.get(message.sessionId)!.add(suppressed);
+                        console.log(`[loop] Suppressing redundant tool: ${suppressed} (suppressed by ${toolName})`);
+                    }
                 }
             } catch (toolErr: unknown) {
                 const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);

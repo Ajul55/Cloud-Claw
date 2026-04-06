@@ -55,7 +55,7 @@ export const diagnoseDomainTool: Tool = {
             },
             server_label: {
                 type: 'string',
-                description: 'Target server label. Options: production or test. Defaults to production.',
+                description: 'Target server label or ID from Cloudstick API (use get_cloudstick_servers to find active server IDs).',
             },
             expected_service: {
                 type: 'string',
@@ -90,8 +90,8 @@ export const diagnoseDomainTool: Tool = {
             ] = await Promise.allSettled([
                 sshExec(server.ip, `dig +short ${domain}`, sshOptions),
                 sshExec(server.ip, `curl -s -H "Host: ${domain}" http://127.0.0.1 | grep -o '<title>[^<]*</title>' | head -1`, sshOptions),
-                sshExec(server.ip, `grep -rl "${domain}" /etc/nginx/sites-enabled/ 2>/dev/null | head -3`, sshOptions),
-                sshExec(server.ip, `grep -A15 "server_name ${domain}" /etc/nginx/sites-enabled/*.conf 2>/dev/null`, sshOptions),
+                sshExec(server.ip, `grep -rl "${domain}" /etc/nginx-cs/vhosts.d/ 2>/dev/null | head -3`, sshOptions),
+                sshExec(server.ip, `grep -A15 "server_name ${domain}" /etc/nginx-cs/vhosts.d/*.conf /etc/nginx-cs/vhosts.d/*.d/*.conf 2>/dev/null`, sshOptions),
                 sshExec(server.ip, `docker ps --format "table {{.Names}}\\t{{.Ports}}\\t{{.Status}}"`, sshOptions),
                 sshExec(server.ip, `ss -tlnp | grep -E '808[0-9]'`, sshOptions),
             ]);

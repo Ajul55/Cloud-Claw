@@ -87,13 +87,22 @@ export class CloudstickApiClient {
     }
 
     /** List all websites for a specific server */
-    public async listWebsitesByServer(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/list/websites/servers/${serverId}/users/${userId}` });
+    public async listWebsitesByServer(
+        serverId: string,
+        userId: string,
+        params?: { page?: number; limit?: number; search?: string; status?: string; website_type?: string }
+    ) {
+        return this.request({ method: 'GET', url: `/list/websites/servers/${serverId}/users/${userId}`, params });
     }
 
     /** List website subdomains */
-    public async listWebsiteSubdomains(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/list/website-subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    public async listWebsiteSubdomains(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        params?: { page?: number; limit?: number; search?: string; status?: string; website_type?: string }
+    ) {
+        return this.request({ method: 'GET', url: `/list/website-subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, params });
     }
 
     /** Reboot a server */
@@ -214,11 +223,13 @@ export class CloudstickApiClient {
         websiteId: string,
         serverId: string,
         userId: string,
-        domains: string[]
+        domains: string[],
+        requireSsl?: boolean
     ) {
         return this.request({
             method: 'PATCH',
             url: `/adddomain/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            params: requireSsl !== undefined ? { require_ssl: requireSsl } : undefined,
             data: { domains }
         });
     }
@@ -398,6 +409,75 @@ export class CloudstickApiClient {
         return this.request({ method: 'DELETE', url: `/systemuser/${sysUserId}/servers/${serverId}/users/${userId}` });
     }
 
+    /** Update sudo permission for a system user (confirmed in Insomnia) */
+    public async updateSudoPermission(sysUserId: string, serverId: string, userId: string, data: { sudo_permission: boolean }) {
+        return this.request({ method: 'PATCH', url: `/sudo-permission/systemuser/${sysUserId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 7b. Server-Level Database Management (confirmed in Insomnia)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List all database users at server level (confirmed in Insomnia) */
+    public async listServerDatabaseUsers(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/database/db-user/list/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Grant privileges to a database user (confirmed in Insomnia) */
+    public async grantDatabasePrivilege(serverId: string, userId: string, data: { database_id: number; db_user_id: number; privileges: string[] }) {
+        return this.request({ method: 'PATCH', url: `/database/grantedprivilege/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Revoke privileges from a database user (confirmed in Insomnia) */
+    public async revokeDatabasePrivilege(serverId: string, userId: string, data: { database_id: number; db_user_id: number; privileges: string[] }) {
+        return this.request({ method: 'PATCH', url: `/database/revokeprivilege/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Remove a database user from a database (confirmed in Insomnia) */
+    public async removeUserFromDatabase(serverId: string, userId: string, data: { database_id: number; db_user_id: number }) {
+        return this.request({ method: 'DELETE', url: `/database/removeuser/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Delete email account (confirmed in Insomnia) */
+    public async deleteEmailAccount(websiteId: string, serverId: string, userId: string, data: { name: string }) {
+        return this.request({ method: 'DELETE', url: `/email/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Delete email forward (confirmed in Insomnia) */
+    public async deleteEmailForward(websiteId: string, serverId: string, userId: string, params: { name: string; forwardemail: string }) {
+        return this.request({ method: 'DELETE', url: `/email/forward/websites/${websiteId}/servers/${serverId}/users/${userId}`, params });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 26b. Server-Level Cron Jobs (confirmed in Insomnia)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List server-level cron jobs */
+    public async listServerCronJobs(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/cron/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Create a server-level cron job */
+    public async createServerCronJob(serverId: string, userId: string, data: {
+        user_name: string;
+        label: string;
+        binary: string;
+        path: string;
+        schedule: string;
+    }) {
+        return this.request({ method: 'POST', url: `/cron/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Update a server-level cron job by ID */
+    public async updateServerCronJob(cronId: string, serverId: string, userId: string, data: { schedule?: string; label?: string }) {
+        return this.request({ method: 'PATCH', url: `/cron/${cronId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Delete a server-level cron job by ID */
+    public async deleteServerCronJob(cronId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/cron/${cronId}/servers/${serverId}/users/${userId}` });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // 8. Team Collaboration & Access (official v2)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -510,9 +590,61 @@ export class CloudstickApiClient {
         return this.request({ method: 'GET', url: `/wordpress/manager/urls/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
+    /** Update WordPress site URLs */
+    public async updateWpUrls(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { home_url?: string; site_url?: string }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/urls/${websiteId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
+    }
+
+    /** Get WordPress debug configuration */
+    public async getWpDebugInfo(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/debug/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Update WordPress debug configuration */
+    public async updateWpDebugInfo(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { debug_enabled: boolean; debug_log?: boolean; debug_display?: boolean; debug_log_path?: string }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/debug/${websiteId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
+    }
+
     /** Toggle WordPress maintenance mode */
     public async toggleWpMaintenanceMode(websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'POST', url: `/wordpress/manager/maintanance/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress maintenance mode */
+    public async getWpMaintenanceMode(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/maintanance/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Update WordPress maintenance mode */
+    public async updateWpMaintenanceMode(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { maintanance_enabled: boolean }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/maintanance/${websiteId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
     }
 
     /** Toggle WordPress debug mode */
@@ -523,6 +655,25 @@ export class CloudstickApiClient {
     /** Update WordPress search index */
     public async updateWpSearchIndex(websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'POST', url: `/wordpress/manager/searchindex/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Get WordPress search index mode */
+    public async getWpSearchIndexMode(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/manager/searchindex/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Update WordPress search index mode */
+    public async updateWpSearchIndexMode(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { search_index_enabled: boolean }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/wordpress/manager/searchindex/${websiteId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
     }
 
     /** List WordPress plugins for a site */
@@ -562,6 +713,228 @@ export class CloudstickApiClient {
     /** Change website public path */
     public async changePublicPath(websiteId: string, serverId: string, userId: string, data: { public_path: string }) {
         return this.request({ method: 'PATCH', url: `/changepublicpath/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get website activity log */
+    public async getWebsiteActivityLogs(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        params?: { limit?: number; offset?: number }
+    ) {
+        return this.request({
+            method: 'GET',
+            url: `/nginx-logs/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            params,
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 26. Supervisor Jobs (confirmed in Insomnia)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List server-level supervisor jobs */
+    public async listSupervisorJobs(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/svjobs/servers/${serverId}/users/${userId}` });
+    }
+
+    /** List website-level supervisor jobs */
+    public async listWebsiteSupervisorJobs(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/svjobs/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Create a server-level supervisor job */
+    public async createSupervisorJob(serverId: string, userId: string, data: {
+        job_name: string;
+        command: string;
+        username: string;
+        num_procs?: number;
+        directory?: string;
+        auto_start?: boolean;
+        auto_restart?: boolean;
+    }) {
+        return this.request({ method: 'POST', url: `/svjobs/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Create a website-level supervisor job */
+    public async createWebsiteSupervisorJob(websiteId: string, serverId: string, userId: string, data: {
+        job_name: string;
+        command: string;
+        username: string;
+        num_procs?: number;
+        directory?: string;
+        auto_start?: boolean;
+        auto_restart?: boolean;
+    }) {
+        return this.request({ method: 'POST', url: `/svjobs/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Rebuild server-level supervisor jobs */
+    public async rebuildSupervisorJobs(serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/svjobs/rebuild/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Rebuild all server-level supervisor jobs */
+    public async rebuildAllSupervisorJobs(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/svjobs/rebuildall/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Handle (start/stop) a supervisor job */
+    public async handleSupervisorJob(serverId: string, userId: string, data: { name: string; action: string }) {
+        return this.request({ method: 'PATCH', url: `/svjobs/handle/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Delete a server-level supervisor job by job name */
+    public async deleteSupervisorJob(jobName: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/svjobs/${encodeURIComponent(jobName)}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Delete a website-level supervisor job */
+    public async deleteWebsiteSupervisorJob(jobName: string, websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/svjobs/${encodeURIComponent(jobName)}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Rebuild website-level supervisor jobs */
+    public async rebuildWebsiteSupervisorJobs(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/svjobs/rebuild/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 27. Backups (confirmed in Insomnia)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List user-level backups */
+    public async listUserBackups(userId: string) {
+        return this.request({ method: 'GET', url: `/backup/users/${userId}` });
+    }
+
+    /** List website backups */
+    public async listWebsiteBackups(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** List database backups */
+    public async listDatabaseBackups(databaseId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/databases/${databaseId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Enable or update website backup */
+    public async enableWebsiteBackup(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        data: { backup_period: string; is_full_backup?: boolean; success_backup_email?: boolean; failed_backup_email?: boolean }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/backup/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
+    }
+
+    /** Disable website backup */
+    public async disableWebsiteBackup(websiteId: string, serverId: string, userId: string) {
+        return this.request({
+            method: 'PATCH',
+            url: `/backup/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data: { backup_period: '', is_full_backup: false },
+        });
+    }
+
+    /** Enable or update database backup */
+    public async enableDatabaseBackup(
+        databaseId: string,
+        serverId: string,
+        userId: string,
+        data: { backup_period: string; success_backup_email?: boolean; failed_backup_email?: boolean }
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/backup/databases/${databaseId}/servers/${serverId}/users/${userId}`,
+            data,
+        });
+    }
+
+    /** Disable database backup */
+    public async disableDatabaseBackup(databaseId: string, serverId: string, userId: string) {
+        return this.request({
+            method: 'PATCH',
+            url: `/backup/databases/${databaseId}/servers/${serverId}/users/${userId}`,
+            data: { backup_period: '' },
+        });
+    }
+
+    /** Create a manual website backup */
+    public async createManualWebsiteBackup(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/backup/manual/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Create a manual database backup */
+    public async createManualDatabaseBackup(databaseId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/backup/manual/databases/${databaseId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Restore a website backup by file ID */
+    public async restoreWebsiteBackup(fileId: string, websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/restore/files/${fileId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Restore a database backup by file ID */
+    public async restoreDatabaseBackup(fileId: string, databaseId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/restore/files/${fileId}/databases/${databaseId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 28. Extended File Operations (confirmed in Insomnia)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Rename a file or directory */
+    public async renameFile(websiteId: string, serverId: string, userId: string, data: { path: string; name: string; new_name: string }) {
+        return this.request({ method: 'PATCH', url: `/files/rename/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Move a file or directory */
+    public async moveFile(websiteId: string, serverId: string, userId: string, data: { path: string; name: string; new_path: string }) {
+        return this.request({ method: 'PATCH', url: `/files/move/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Copy a file or directory */
+    public async copyFile(websiteId: string, serverId: string, userId: string, data: { path: string; name: string; new_name?: string }) {
+        return this.request({ method: 'POST', url: `/files/copy/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Change file permissions (chmod) */
+    public async changeFilePermissions(websiteId: string, serverId: string, userId: string, data: { path: string; name: string; permissions: string }) {
+        return this.request({ method: 'PATCH', url: `/files/permission/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get a panel-managed NGINX config file */
+    public async getWebsiteNginxConfigFile(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        configFile: string
+    ) {
+        return this.request({
+            method: 'GET',
+            url: `/nginx/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            params: { config_file: configFile },
+        });
+    }
+
+    /** Update a panel-managed NGINX config file */
+    public async updateWebsiteNginxConfigFile(
+        websiteId: string,
+        serverId: string,
+        userId: string,
+        configFile: string,
+        content: string
+    ) {
+        return this.request({
+            method: 'PATCH',
+            url: `/nginx/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data: { config_file: configFile, content },
+        });
     }
 
     /** Remove domain from website */
@@ -727,6 +1100,201 @@ export class CloudstickApiClient {
     /** Update third-party integration */
     public async updateThirdPartyIntegration(integrationId: string, userId: string, data: { secret_key?: string }) {
         return this.request({ method: 'PATCH', url: `/thirdpartyintegrations/${integrationId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 16. Firewall & Security — TODO: confirm Cloudstick endpoint
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get firewall status */
+    // TODO: confirm Cloudstick endpoint
+    public async getFirewallStatus(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/firewall/status/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Manage brute force shield */
+    // TODO: confirm Cloudstick endpoint
+    public async manageBruteForceShield(serverId: string, userId: string, action: string) {
+        return this.request({ method: 'POST', url: `/firewall/bruteforce/${action}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Manage IP rule (whitelist, block, unblock, etc.) */
+    // TODO: confirm Cloudstick endpoint
+    public async manageIpRule(serverId: string, userId: string, data: { ip: string; action: string }) {
+        return this.request({ method: 'POST', url: `/firewall/ip-rule/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Add temporary IP rule */
+    // TODO: confirm Cloudstick endpoint
+    public async addTemporaryIpRule(serverId: string, userId: string, data: { ip: string; action: string; duration: string }) {
+        return this.request({ method: 'POST', url: `/firewall/temp-rule/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** List temporary IP rules */
+    // TODO: confirm Cloudstick endpoint
+    public async listTemporaryIpRules(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/firewall/temp-rules/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 17. PHP Extensions & CLI — TODO: confirm Cloudstick endpoint
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Manage PHP extension (enable/disable) */
+    // TODO: confirm Cloudstick endpoint
+    public async managePhpExtension(websiteId: string, serverId: string, userId: string, data: { extension: string; action: string }) {
+        return this.request({ method: 'PATCH', url: `/php/extension/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Change PHP CLI version */
+    // TODO: confirm Cloudstick endpoint
+    public async changePhpCliVersion(serverId: string, userId: string, data: { php_version: string }) {
+        return this.request({ method: 'PATCH', url: `/php/cli-version/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 18. Service Control — TODO: confirm Cloudstick endpoint
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Manage system service (start/stop/restart/status) */
+    // TODO: confirm Cloudstick endpoint
+    public async manageService(serverId: string, userId: string, data: { service: string; action: string; port?: number }) {
+        return this.request({ method: 'POST', url: `/service/${data.action}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get service status */
+    // TODO: confirm Cloudstick endpoint
+    public async getServiceStatus(serverId: string, userId: string, service: string) {
+        return this.request({ method: 'GET', url: `/service/status/${service}/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 19. Server Settings — timezone, cleanup, hostname, auto-update
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Configure server timezone */
+    // TODO: confirm Cloudstick endpoint
+    public async configureTimezone(serverId: string, userId: string, data: { timezone: string }) {
+        return this.request({ method: 'PATCH', url: `/timezone/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Run server cleanup */
+    // TODO: confirm Cloudstick endpoint
+    public async cleanupServer(serverId: string, userId: string, data: { target: string; log_retention_period?: string }) {
+        return this.request({ method: 'POST', url: `/cleanup/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get server hostname (confirmed: GET /hostname/servers/{s}/users/{u}) */
+    public async getHostname(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/hostname/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Set server hostname (confirmed: POST /hostname/servers/{s}/users/{u}) */
+    public async setHostname(serverId: string, userId: string, data: { hostname: string }) {
+        return this.request({ method: 'POST', url: `/hostname/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Run auto-update */
+    // TODO: confirm Cloudstick endpoint
+    public async runAutoUpdate(serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/autoupdate/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 20. Website Management — maintenance mode, subdomain
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Set maintenance mode for a website (non-WordPress) */
+    // TODO: confirm Cloudstick endpoint
+    public async setMaintenanceMode(websiteId: string, serverId: string, userId: string, data: { enabled: boolean }) {
+        return this.request({ method: 'PATCH', url: `/maintenance/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Add subdomain to a website */
+    // TODO: confirm Cloudstick endpoint — subdomains use WebSocket per app type in Insomnia
+    public async addSubdomain(websiteId: string, serverId: string, userId: string, data: { subdomain: string }) {
+        return this.request({ method: 'POST', url: `/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Renew free SSL certificate (confirmed: POST /ssl/free-certificate/renew/websites/{w}/servers/{s}/users/{u}) */
+    public async renewFreeSSL(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/ssl/free-certificate/renew/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Revoke/remove SSL (alias for deleteSSL, included for semantic clarity) */
+    public async revokeSSL(websiteId: string, serverId: string, userId: string) {
+        return this.deleteSSL(websiteId, serverId, userId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 21. WordPress Site Creation — TODO: confirm REST vs WebSocket
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Create a WordPress site (Insomnia shows WebSocket; trying REST POST fallback) */
+    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/wordpress/servers/{s}/users/{u}
+    public async createWordPressSite(serverId: string, userId: string, data: {
+        email: string; website_name: string; domain: string; site_title: string;
+        admin_username: string; admin_password: string; admin_email: string;
+        php_version: string; web_app_server: string; account_label?: string;
+    }) {
+        return this.request({ method: 'POST', url: `/wordpress/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 22. Custom PHP Site Creation — TODO: confirm REST vs WebSocket
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Create a custom PHP site (Insomnia shows WebSocket; trying REST POST fallback) */
+    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/customphp/servers/{s}/users/{u}
+    public async createCustomPhpSite(serverId: string, userId: string, data: {
+        email: string; website_name: string; domain_type: string; domain_name: string;
+        php_version: string; web_app_server: string;
+        clickjacking_protection?: boolean; xss_protection?: boolean; mime_sniffing_protection?: boolean;
+        account_label?: string;
+    }) {
+        return this.request({ method: 'POST', url: `/customphp/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 23. Webmail — confirmed from Insomnia
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Enable webmail (Roundcube) for a website */
+    // TODO: confirm REST endpoint — Insomnia uses ws://*/roundcubewebmail/subdomain/websites/{w}/servers/{s}/users/{u}
+    public async enableWebmail(websiteId: string, serverId: string, userId: string, data?: { account_label?: string }) {
+        return this.request({ method: 'POST', url: `/roundcubewebmail/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 24. File Manager — TODO: confirm Cloudstick endpoint
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Upload a file to the server */
+    // TODO: confirm Cloudstick endpoint
+    public async uploadFile(serverId: string, userId: string, data: { destination_path: string; file_content: string; file_name: string }) {
+        return this.request({ method: 'POST', url: `/filemanager/upload/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Create an empty file */
+    // TODO: confirm Cloudstick endpoint
+    public async createFile(serverId: string, userId: string, data: { path: string; file_name: string }) {
+        return this.request({ method: 'POST', url: `/filemanager/create-file/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Create a folder */
+    // TODO: confirm Cloudstick endpoint
+    public async createFolder(serverId: string, userId: string, data: { path: string; folder_name: string }) {
+        return this.request({ method: 'POST', url: `/filemanager/create-folder/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 25. FTP Account Management — TODO: confirm Cloudstick endpoint
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Create FTP account */
+    // TODO: confirm Cloudstick endpoint
+    public async createFtpAccount(serverId: string, userId: string, data: { ftp_username: string; ftp_password: string; directory: string }) {
+        return this.request({ method: 'POST', url: `/ftp/servers/${serverId}/users/${userId}`, data });
     }
 }
 

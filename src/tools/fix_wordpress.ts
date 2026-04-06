@@ -34,7 +34,7 @@ export const fixWordpressTool: Tool = {
             // 1. Auto-detect WP root if not provided
             if (!siteRoot) {
                 const detected = await sshExec(host,
-                    "grep -rl 'root ' /etc/nginx/sites-enabled/ 2>/dev/null | head -1 | xargs grep 'root ' 2>/dev/null | grep -oP 'root\\s+\\K[^;]+' | head -1"
+                    "grep -rl 'root ' /etc/nginx-cs/vhosts.d/ 2>/dev/null | head -1 | xargs grep 'root ' 2>/dev/null | grep -oP 'root\\s+\\K[^;]+' | head -1"
                 );
                 siteRoot = detected.trim() || '/var/www/html';
             }

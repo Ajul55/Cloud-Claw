@@ -44,8 +44,8 @@ async function discoverStack(
 
     // Parallelize the independent SSH calls
     const [nginxResult, vhostResult, phpResult] = await Promise.allSettled([
-        sshExec(host, 'nginx -v 2>&1 | head -1'),
-        sshExec(host, `grep -rl "server_name.*${domain}" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -1`),
+        sshExec(host, 'nginx-cs -v 2>&1 | head -1'),
+        sshExec(host, `grep -rl "server_name.*${domain}" /etc/nginx-cs/vhosts.d/ /etc/nginx-cs/vhosts.d/*.d/ 2>/dev/null | head -1`),
         sshExec(host, 'php -r "echo phpversion();" 2>/dev/null || php --version 2>/dev/null | head -1')
     ]);
 

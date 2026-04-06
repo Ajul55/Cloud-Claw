@@ -32,7 +32,7 @@ export async function getAllServers(): Promise<ServerNode[]> {
         };
         const servers = response?.message?.servers ?? [];
 
-        return servers
+        const mapped = servers
             .map((s) => ({
                 id: typeof s.id === 'string' ? parseInt(s.id, 10) : (s.id ?? 0),
                 label: s.name ?? s.label ?? s.host_name ?? 'unknown',
@@ -41,6 +41,8 @@ export async function getAllServers(): Promise<ServerNode[]> {
                 sshPort: 22,
                 active: true, // Cloudstick API sometimes returns is_active: false for running nodes
             }));
+        console.log('[server_registry] Servers from API:', mapped.map(s => `${s.label} (${s.ip}, id=${s.id})`).join(', '));
+        return mapped;
     } catch (err) {
         console.warn('[server_registry] Cloudstick API failed:', err);
         return [];
@@ -50,7 +52,40 @@ export async function getAllServers(): Promise<ServerNode[]> {
 export async function getServerByLabel(label: string): Promise<ServerNode | null> {
     const normalized = label.trim().toLowerCase();
     const servers = await getAllServers();
-    return servers.find((server) => server.label.toLowerCase() === normalized) ?? null;
+
+    // 1. Exact match
+    const exact = servers.find((server) => server.label.toLowerCase() === normalized);
+    if (exact) return exact;
+
+    // 2. Partial/includes match (e.g. "mail-server" matches "mail-server-01" or vice versa)
+    const partial = servers.find((server) => {
+        const sl = server.label.toLowerCase();
+        return sl.includes(normalized) || normalized.includes(sl);
+    });
+    if (partial) {
+        console.log(`[server_registry] Partial match: "${label}" → "${partial.label}"`);
+        return partial;
+    }
+
+    // 3. Normalized match (strip hyphens, underscores, spaces for comparison)
+    const strip = (s: string) => s.replace(/[-_ ]/g, '').toLowerCase();
+    const normalizedStripped = strip(normalized);
+    const stripped = servers.find((server) => strip(server.label) === normalizedStripped);
+    if (stripped) {
+        console.log(`[server_registry] Normalized match: "${label}" → "${stripped.label}"`);
+        return stripped;
+    }
+
+    // 4. Levenshtein fuzzy match (typos)
+    for (const server of servers) {
+        if (levenshtein(normalized, server.label.toLowerCase()) <= 2) {
+            console.log(`[server_registry] Fuzzy match: "${label}" → "${server.label}"`);
+            return server;
+        }
+    }
+
+    console.warn(`[server_registry] No match for "${label}". Available: ${servers.map(s => s.label).join(', ')}`);
+    return null;
 }
 
 export async function getServerByIp(ip: string): Promise<ServerNode | null> {
@@ -154,15 +189,27 @@ export function formatServerTarget(server: Pick<ServerNode, 'label' | 'ip'>): st
 export async function resolveServerArg(args: Record<string, unknown>): Promise<ServerNode> {
     const serverLabel = String(args.server_label ?? '').trim();
     const host = String(args.host ?? '').trim();
+    const serverId = String(args.server_id ?? '').trim();
 
+    // Try by label first (now with fuzzy matching)
     if (serverLabel) {
         const server = await getServerByLabel(serverLabel);
-        if (!server) {
-            throw new Error(`Server "${serverLabel}" not found in registry`);
-        }
-        return server;
+        if (server) return server;
+        // Don't throw yet — try other args or fallback to ID
+        console.warn(`[server_registry] Label "${serverLabel}" not found, trying other args...`);
     }
 
+    // Try by server ID
+    if (serverId && serverId !== '0') {
+        const servers = await getAllServers();
+        const byId = servers.find(s => String(s.id) === serverId);
+        if (byId) {
+            console.log(`[server_registry] Resolved by ID: ${serverId} → ${byId.label}`);
+            return byId;
+        }
+    }
+
+    // Try by IP/host
     if (host) {
         const known = await getServerByIp(host);
         if (known) return known;
@@ -174,6 +221,13 @@ export async function resolveServerArg(args: Record<string, unknown>): Promise<S
             sshPort: 22,
             active: true,
         };
+    }
+
+    // If we had a label but nothing matched, throw a helpful error
+    if (serverLabel) {
+        const servers = await getAllServers();
+        const available = servers.map(s => `"${s.label}" (ID: ${s.id})`).join(', ');
+        throw new Error(`Server "${serverLabel}" not found in registry. Available servers: ${available}`);
     }
 
     return getDefaultServer();

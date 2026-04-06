@@ -17,6 +17,16 @@ const AUDIT_OVERRIDE_PATTERNS = [
     /\b(what'?s\s*going\s*on|check\s*everything|any\s*issues|full\s*report)\b/i,
 ];
 
+// Words that indicate an ACTION is being requested — these override audit mode
+// so "create audit script" or "set cron" don't get blocked by the audit pattern.
+const ACTION_PATTERNS = [
+    /\b(create|set|add|delete|remove|run|execute|start|stop|restart|enable|disable|update|change|modify|install|deploy|backup|restore|fix|repair|renew)\b/i,
+];
+
+const APPROVAL_EXIT_PATTERNS = [
+    /\b^(yes|yep|yeah|proceed|exit|apply|continue|go\s*ahead|do\s*it|fix\s*it|make\s*it\s*so|confirmed?|correct|that's?\s*right|exit\s*audit\s*mode)\b$/i,
+];
+
 const INTENT_CLASSIFIER_PROMPT = `You are the Intent Classifier for an AIOps system. 
 Analyze the user's message and return a strictly typed JSON object matching this schema:
 
@@ -98,9 +108,13 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
 
             const parsed = JSON.parse(content) as Intent;
 
-            // Hardcoded Audit Override
-            if (AUDIT_OVERRIDE_PATTERNS.some(p => p.test(messageText))) {
-                parsed.isAudit = true;
+            // Hardcoded Audit Override — but NOT if the message is an explicit approval/exit
+            // or contains action words (create, set, run, etc.)
+            const message = messageText.trim();
+            const isExplicitApproval = APPROVAL_EXIT_PATTERNS.some(p => p.test(message));
+            const containsAction = ACTION_PATTERNS.some(p => p.test(message));
+            if (AUDIT_OVERRIDE_PATTERNS.some((p: RegExp) => p.test(messageText))) {
+                parsed.isAudit = !isExplicitApproval && !containsAction;
             }
 
             // Ensure domains is an array

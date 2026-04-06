@@ -26,7 +26,7 @@ export const diagnoseServicesTool: Tool = {
 
         try {
             const [services, disk, memory, uptime, listeners] = await Promise.all([
-                sshExec(host, 'systemctl status mariadb mysql php*-fpm apache2 redis-server 2>&1 | head -80'),
+                sshExec(host, 'systemctl status mariadb mysql nginx-cs redis-server php81cs-fpm php82cs-fpm php83cs-fpm php84cs-fpm 2>&1 | head -80'),
                 sshExec(host, 'df -h 2>&1'),
                 sshExec(host, 'free -m 2>&1'),
                 sshExec(host, 'uptime 2>&1'),

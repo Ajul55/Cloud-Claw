@@ -6,7 +6,7 @@ export const create_nginx_vhost: Tool = {
   approvalTier: 3,
   getRationale: (args) => {
     const domain = String(args.domain ?? 'domain');
-    return `Create and enable new nginx vhost for ${domain}, write config to /etc/nginx/sites-enabled and reload nginx.`;
+    return `Create and enable new nginx-cs vhost for ${domain}, write config to /etc/nginx-cs/vhosts.d/ and reload nginx-cs.`;
   },
   description:
     'Create a new Nginx virtual host config on the server. ' +
@@ -14,6 +14,7 @@ export const create_nginx_vhost: Tool = {
     'point a domain to an IP/port, or create a new vhost. ' +
     'Requires: host, domain, and one of: static_root (for static sites) ' +
     'or proxy_pass (for reverse proxy e.g. "http://65.20.83.180/api"). ' +
+    'Cloudstick uses nginx-cs with config path /etc/nginx-cs/vhosts.d/. ' +
     'This tool will trigger approval before writing.',
   parameters: {
     type: 'object',
@@ -97,7 +98,7 @@ export const create_nginx_vhost: Tool = {
       }
 
       // Determine config file path
-      const configPath = `/etc/nginx/sites-enabled/${domain}.conf`;
+      const configPath = `/etc/nginx-cs/vhosts.d/${domain}.conf`;
 
       // Check if file already exists
       const existsCheck = await sshExec(host,
@@ -126,19 +127,19 @@ export const create_nginx_vhost: Tool = {
         };
       }
 
-      // Test nginx config
-      const testResult = await sshExec(host, 'nginx -t 2>&1');
+      // Test nginx-cs config
+      const testResult = await sshExec(host, 'nginx-cs -t 2>&1');
       if (!testResult.includes('test is successful') && !testResult.includes('syntax is ok')) {
         // Config test failed — remove the bad file
         await sshExec(host, `rm ${configPath}`);
         return {
           success: false,
-          output: `Config test failed after writing. File removed.\nnginx -t output:\n${testResult}`,
+          output: `Config test failed after writing. File removed.\nnginx-cs -t output:\n${testResult}`,
         };
       }
 
-      // Reload nginx
-      await sshExec(host, 'systemctl reload nginx');
+      // Reload nginx-cs
+      await sshExec(host, 'systemctl reload nginx-cs');
 
       return {
         success: true,
@@ -146,8 +147,8 @@ export const create_nginx_vhost: Tool = {
           `✅ Vhost created: ${configPath}\n` +
           `Domain: ${domain}\n` +
           `${proxyPass ? `Proxy: ${proxyPass}` : `Root: ${staticRoot}`}\n` +
-          `nginx -t: ${testResult.trim()}\n` +
-          `nginx reloaded successfully.`,
+          `nginx-cs -t: ${testResult.trim()}\n` +
+          `nginx-cs reloaded successfully.`,
       };
 
     } catch (err) {

@@ -13,7 +13,7 @@ function nginxTestPassed(output: string): boolean {
 export const fixNginxConfigTool: Tool = {
     name: 'fix_nginx_config',
     description:
-        'Apply a safe, targeted remediation for common Nginx config parse issues (BOM/CRLF/stray quote on first line), then validate with nginx -t and restart nginx if valid. ' +
+        'Apply a safe, targeted remediation for common Nginx config parse issues (BOM/CRLF/stray quote on first line), then validate with nginx-cs -t and restart nginx-cs if valid. ' +
         'Use this when diagnostics show an unknown directive error in a specific nginx config file.',
     parameters: {
         type: 'object',
@@ -28,7 +28,7 @@ export const fixNginxConfigTool: Tool = {
             },
             file_path: {
                 type: 'string',
-                description: 'Absolute nginx config path to repair (example: /etc/nginx/sites-enabled/example.com).',
+                description: 'Absolute nginx-cs config path to repair (example: /etc/nginx-cs/vhosts.d/example.com.conf).',
             },
         },
         required: ['file_path'],
@@ -80,18 +80,18 @@ export const fixNginxConfigTool: Tool = {
             await sshExec(server.ip, `sudo sed -i '1s/^[[:space:]]*\\"[[:space:]]*server[[:space:]]*{/server {/' "${filePath}"`, sshOptions);
 
             const after = await sshExec(server.ip, `sudo nl -ba "${filePath}" | sed -n '1,12p'`, sshOptions);
-            const testOutput = await sshExec(server.ip, 'sudo nginx -t 2>&1 || nginx -t 2>&1', sshOptions);
+            const testOutput = await sshExec(server.ip, 'sudo nginx-cs -t 2>&1 || nginx-cs -t 2>&1', sshOptions);
 
             if (!nginxTestPassed(testOutput)) {
                 await sshExec(server.ip, `sudo cp "${backupPath}" "${filePath}"`, sshOptions);
                 return {
                     success: false,
                     output: [
-                        `Attempted fix on ${filePath}, but nginx -t still failed. Restored backup.`,
+                        `Attempted fix on ${filePath}, but nginx-cs -t still failed. Restored backup.`,
                         '',
                         `Backup restored from: ${backupPath}`,
                         '',
-                        'nginx -t output:',
+                        'nginx-cs -t output:',
                         '```',
                         testOutput || '(no output)',
                         '```',
@@ -101,7 +101,7 @@ export const fixNginxConfigTool: Tool = {
 
             const restartOutput = await sshExec(
                 server.ip,
-                'sudo systemctl restart nginx && sudo systemctl is-active nginx && sudo systemctl status nginx --no-pager -l | sed -n "1,30p"',
+                'sudo systemctl restart nginx-cs && sudo systemctl is-active nginx-cs && sudo systemctl status nginx-cs --no-pager -l | sed -n "1,30p"',
                 sshOptions
             );
 
@@ -127,7 +127,7 @@ export const fixNginxConfigTool: Tool = {
                         ? ['Verify preview (cat -A head -3):', '```', verifyPreview, '```', '']
                         : []),
                     '',
-                    'nginx -t output:',
+                    'nginx-cs -t output:',
                     '```',
                     testOutput || '(no output)',
                     '```',

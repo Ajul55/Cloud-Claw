@@ -49,13 +49,13 @@ export const getCloudstickWebsitesTool: Tool = {
             // 2. SSH-based discovery — always attempt as it's more reliable
             try {
                 const [nginxSites, apacheSites, webRoots] = await Promise.all([
-                    sshExec(server.ip, 'ls -la /etc/nginx/sites-enabled/ 2>/dev/null || echo "(no nginx sites-enabled)"', {
+                    sshExec(server.ip, 'ls -la /etc/nginx-cs/vhosts.d/ 2>/dev/null || echo "(no nginx-cs vhosts)"', {
                         user: server.sshUser, port: server.sshPort
                     }),
                     sshExec(server.ip, 'ls -la /etc/apache2/sites-enabled/ 2>/dev/null || echo "(no apache sites-enabled)"', {
                         user: server.sshUser, port: server.sshPort
                     }),
-                    sshExec(server.ip, 'ls -d /home/*/public_html 2>/dev/null || ls -d /var/www/*/ 2>/dev/null || echo "(no web roots found)"', {
+                    sshExec(server.ip, 'ls -d /home/*/apps/*/ 2>/dev/null || ls -d /home/cloudstick/apps/*/ 2>/dev/null || echo "(no web roots found)"', {
                         user: server.sshUser, port: server.sshPort
                     }),
                 ]);
@@ -71,7 +71,7 @@ export const getCloudstickWebsitesTool: Tool = {
                 try {
                     const serverNames = await sshExec(
                         server.ip,
-                        'grep -rh "server_name " /etc/nginx/sites-enabled/ 2>/dev/null | sort -u | head -20',
+                        'grep -rh "server_name " /etc/nginx-cs/vhosts.d/ 2>/dev/null | sort -u | head -20',
                         { user: server.sshUser, port: server.sshPort }
                     );
                     if (serverNames && !serverNames.includes('(')) {

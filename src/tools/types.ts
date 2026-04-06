@@ -23,6 +23,10 @@ export interface Tool {
     /** Optional: return a string snapshot of the current resource state.
      *  Used by the HITL flow to detect state drift between approval request and execution. */
     getCurrentState?: (args: Record<string, unknown>) => Promise<string>;
+    /** Optional: tools that are redundant after this tool succeeds.
+     *  The loop will block any subsequent call to a suppressed tool with a message
+     *  explaining why it was suppressed (e.g. "Already handled by switch_php_api"). */
+    suppressTools?: string[];
     /** Execute the tool and return a result */
     execute(args: Record<string, unknown>): Promise<ToolResult>;
 }

@@ -23,14 +23,14 @@ export const diagnoseNginxTool: Tool = {
     name: 'diagnose_nginx',
     description:
         'Run a focused Nginx diagnostics routine on a remote host. ' +
-        'Collects service status, nginx -t output, and surrounding config lines when an error references a file/line. ' +
+        'Collects service status, nginx-cs -t output, and surrounding config lines when an error references a file/line. ' +
         'Use this first when the user asks to diagnose or debug an Nginx failure.',
     parameters: {
         type: 'object',
         properties: {
             server_label: {
                 type: 'string',
-                description: 'Target server label or ID (e.g. "production"). Must match a server from the registered list.',
+                description: 'Target server label or ID from Cloudstick API (use get_cloudstick_servers to find active server IDs).',
             },
             host: {
                 type: 'string',
@@ -45,13 +45,13 @@ export const diagnoseNginxTool: Tool = {
             const [statusOutput, testOutput] = await Promise.all([
                 sshExec(
                     server.ip,
-                    `sudo systemctl status nginx --no-pager -l 2>&1 | sed -n '1,80p' || systemctl status nginx --no-pager -l 2>&1 | sed -n '1,80p'`
+                    `sudo systemctl status nginx-cs --no-pager -l 2>&1 | sed -n '1,80p' || systemctl status nginx-cs --no-pager -l 2>&1 | sed -n '1,80p'`
                     , { user: server.sshUser, port: server.sshPort }
                 ),
-                sshExec(server.ip, 'sudo nginx -t 2>&1 || nginx -t 2>&1', { user: server.sshUser, port: server.sshPort }),
+                sshExec(server.ip, 'sudo nginx-cs -t 2>&1 || nginx-cs -t 2>&1', { user: server.sshUser, port: server.sshPort }),
             ]);
 
-            let configContext = 'No config file/line error detected from nginx -t.';
+            let configContext = 'No config file/line error detected from nginx-cs -t.';
             const parsed = parseConfigError(testOutput);
             if (parsed) {
                 try {
@@ -73,7 +73,7 @@ export const diagnoseNginxTool: Tool = {
                 statusOutput || '(no output)',
                 '```',
                 '',
-                '2) nginx -t output:',
+                '2) nginx-cs -t output:',
                 '```',
                 testOutput || '(no output)',
                 '```',

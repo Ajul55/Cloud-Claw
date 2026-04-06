@@ -9,6 +9,13 @@ function enrichServiceRestartCommand(command: string): string {
 
     if (!restartMatch) return command;
     const service = restartMatch[1];
+
+    // PHP-FPM services hang on restart — force-kill processes first, then start fresh
+    const isPhpService = /^php/i.test(service);
+    if (isPhpService) {
+        return `killall -9 php php-fpm php[0-9][0-9]cs-fpm 2>/dev/null; systemctl start ${service} && systemctl is-active ${service} && systemctl status ${service} --no-pager -l | sed -n '1,30p'`;
+    }
+
     return `${trimmed} && systemctl is-active ${service} && systemctl status ${service} --no-pager -l | sed -n '1,30p'`;
 }
 
@@ -23,7 +30,7 @@ export const executeSshCommandTool: Tool = {
         properties: {
             server_label: {
                 type: 'string',
-                description: 'Target server label or ID (e.g. "production", "test", or "191"). Must exactly match a server registered in the Cloudstick API list.',
+                description: 'Target server label or ID from Cloudstick API (use get_cloudstick_servers to find active server IDs).',
             },
             host: {
                 type: 'string',

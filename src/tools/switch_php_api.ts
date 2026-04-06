@@ -32,6 +32,7 @@ export const switchPhpApiTool: Tool = {
         required: ['website_id', 'server_id', 'php_version'],
     },
     approvalTier: 3,
+    suppressTools: ['execute_ssh_write', 'execute_ssh_command'],
     getRationale: (args) =>
         `This will switch PHP to version ${args.php_version} for ${args.domain ?? 'this website'} on server ${args.server_label ?? args.server_id}. This may cause downtime if the site is not compatible.`,
     getCurrentState: async (args) => {

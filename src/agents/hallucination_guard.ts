@@ -17,6 +17,13 @@ const WRITE_RECEIPTS = [
     'create_cron_job', 'delete_cron_job',
     // Phase 5: Website/DNS management
     'manage_website_settings', 'manage_cloudflare_dns',
+    // Phase 6: Insomnia-confirmed tools
+    'update_mysql_root_password', 'toggle_mysql_remote_access',
+    'delete_email_account', 'update_email_password', 'update_email_quota',
+    'create_email_forward',
+    'grant_database_privilege', 'revoke_database_privilege', 'remove_user_from_database',
+    'update_sudo_permission',
+    'apply_security_headers',
 ];
 
 // Tools that only READ server state (diagnostics, status checks)
@@ -26,6 +33,10 @@ const READ_RECEIPTS = [
     'list_cron_jobs',
     'get_cloudstick_servers', 'get_cloudstick_websites',
     'get_server_details', 'get_wordpress_details',
+    // Phase 6: Insomnia-confirmed read tools
+    'get_mysql_status', 'list_email_accounts', 'list_email_forwards',
+    'get_email_config', 'list_database_users_server',
+    'get_server_activity', 'list_website_subdomains',
 ];
 
 interface HallucinationPattern {

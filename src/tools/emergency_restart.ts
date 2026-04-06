@@ -15,8 +15,9 @@ import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
 // Only these services can be restarted. No custom service names allowed.
 const ALLOWED_SERVICES = new Set([
-    'nginx', 'mysql', 'mariadb', 'php8.0-fpm', 'php8.1-fpm', 'php8.2-fpm',
-    'php8.3-fpm', 'php8.4-fpm', 'apache2', 'redis-server', 'memcached',
+    'nginx-cs', 'mysql', 'mariadb',
+    'php81cs-fpm', 'php82cs-fpm', 'php83cs-fpm', 'php84cs-fpm',
+    'redis-server', 'memcached',
     'supervisor', 'cron',
 ]);
 
@@ -24,12 +25,13 @@ export const emergencyRestartTool: Tool = {
     name: 'emergency_service_restart',
     description:
         'Emergency restart a critical service via SSH when the Cloudstick API is unreachable. ' +
-        'Only allowed for whitelisted services (nginx, mysql, php-fpm, redis, etc.). ' +
+        'Only allowed for whitelisted services (nginx-cs, mysql, php*cs-fpm, redis, etc.). ' +
+        'IMPORTANT: Cloudstick uses nginx-cs (not nginx) and php*cs-fpm (not php*-fpm). ' +
         'Requires HITL approval. Use only as a last resort.',
     parameters: {
         type: 'object',
         properties: {
-            service: { type: 'string', description: 'Service to restart (e.g. "nginx", "mysql", "php8.2-fpm")' },
+            service: { type: 'string', description: 'Service to restart (e.g. "nginx-cs", "mysql", "php83cs-fpm")' },
             server_label: { type: 'string', description: 'Server label (e.g. "production")' },
             host: { type: 'string', description: 'Server IP address' },
         },

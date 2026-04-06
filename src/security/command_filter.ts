@@ -1,9 +1,9 @@
 /**
  * Command Safety Filter
  *
- * Implements a hardcoded block-list for dangerous operations.
- * Any command matching a pattern here will be rejected immediately —
- * no LLM involvement, no overrides.
+ * Implements a hybrid binary-classification and block-list approach.
+ * Replaces the fragile regex whitelists for common read tools, while
+ * keeping strict regexes for dual-purpose tools (systemctl, apt, etc).
  */
 
 interface FilterResult {
@@ -12,188 +12,169 @@ interface FilterResult {
 }
 
 // ─── Block patterns ────────────────────────────────────────────────────────────
-// Each entry: [regex, human-readable reason]
 const BLOCKED_PATTERNS: Array<[RegExp, string]> = [
-    // Destructive file operations
+    // Destructive / System Level
     [/\brm\b.*(\s-[a-zA-Z]*[rf][a-zA-Z]*|\s--recursive|\s--force)/i, 'Recursive or force delete is not allowed'],
     [/rm\s+--no-preserve-root/i, 'rm --no-preserve-root is not allowed'],
     [/:\(\)\{.*:\|:&\};:/i, 'Fork bomb detected'],
-
-    // Disk formatting / wiping
     [/\bmkfs\b/i, 'mkfs (filesystem format) is not allowed'],
     [/\bdd\b.*\bif=\/dev\/(zero|urandom|random)\b/i, 'dd disk wipe is not allowed'],
     [/\bshred\b/i, 'shred (secure delete) is not allowed'],
     [/\bwipefs\b/i, 'wipefs is not allowed'],
 
-    // Privilege escalation / unsafe sudo
-    [/sudo\s+-S\b/i, 'sudo -S (read password from stdin) is not allowed'],
+    // Package installation
+    [/\bapt(-get)?\s+(install|remove|purge)\b/i, 'Apt state modification is not allowed'],
+    [/\byum\s+(install|remove)\b/i, 'Yum state modification is not allowed'],
+    [/\bdnf\s+(install|remove)\b/i, 'DNF state modification is not allowed'],
+    [/\bdpkg\s+(-i|--install|--remove|--purge)\b/i, 'Dpkg state modification is not allowed'],
+
+    // Privilege / Sudo abuse
+    [/sudo\s+-S\b/i, 'sudo -S is not allowed'],
     [/sudo\s+--reset-timestamp/i, 'sudo --reset-timestamp is not allowed'],
     [/sudo\s+su\b/i, 'sudo su is not allowed'],
-    [/sudo\s+bash\b/i, 'sudo bash is not allowed. Use specific commands like "sudo ls" or "sudo cat" instead.'],
-    [/sudo\s+sh\b/i, 'sudo sh is not allowed. Use specific commands like "sudo ls" or "sudo cat" instead.'],
+    [/sudo\s+bash\b/i, 'sudo bash is not allowed.'],
+    [/sudo\s+sh\b/i, 'sudo sh is not allowed.'],
 
-    // Kernel / system tampering
+    // Tampering
     [/\bsysctl\b.*kernel\./i, 'Kernel parameter modification is not allowed'],
     [/\binsmod\b|\brmmod\b|\bmodprobe\b.*-r/i, 'Kernel module manipulation is not allowed'],
-
-    // Network firewall nukes
-    [/iptables\s+-F\b/i, 'iptables -F (flush all rules) is not allowed'],
+    [/iptables\s+-F\b/i, 'iptables -F is not allowed'],
     [/nft\s+flush\s+ruleset/i, 'nft flush ruleset is not allowed'],
+    [/\bufw\s+(allow|deny|delete|enable|disable)\b/i, 'ufw state modification is not allowed'],
 
-    // Chained dangerous redirects
+    // Arbitrary injections & redirects to scary places
     [/>\s*\/dev\/[sh]d[a-z]/i, 'Direct writes to block devices are not allowed'],
-    [/>\s*\/etc\/(passwd|shadow|sudoers|hosts)/i, 'Overwriting critical system files is not allowed'],
-
-    // Injected payload execution blocks
+    [/>>?\s*\/etc\/(passwd|shadow|sudoers|hosts)/i, 'Overwriting critical system files is not allowed'],
     [/\bbase64\b.*\|\s*(bash|sh)\b/i, 'Encoded payload pipe to shell is not allowed'],
     [/\beval\b.*\$\(/i, 'eval with command substitution is not allowed'],
     [/\bcurl\b.*\|\s*(bash|sh)\b/i, 'curl pipe to shell is not allowed'],
     [/\bwget\b.*-[qO].*\|\s*(bash|sh)\b/i, 'wget pipe to shell is not allowed'],
     [/\bpython[23]?\b.*os\.system\b/i, 'Python os.system call is not allowed'],
+    
+    // Explicit write utilities that aren't inherently caught by binary list
+    [/\bsed\s+-i\b/i, 'sed -i (in-place write) is not allowed'],
+    [/\bmv\s+.*\/etc\//i, 'mv into /etc/ is not allowed'],
+    [/\btee\s+\//i, 'tee to root filesystem is not allowed'],
+    [/\bcrontab\s+-[er]/i, 'crontab edit/remove is not allowed'],
 ];
 
-// ─── Whitelists (Lane 2 & Lane 3) ────────────────────────────────────────────────
-// Lane 2: Read-Only Diagnostic Commands
-// Patterns are anchored at start (^) and use flexible tails to handle natural LLM variations.
-// Critical: must NOT allow pipes to shells, semicolons to chain, or redirects to files.
-const LANE2_WHITELIST: Array<[RegExp, string]> = [
-    // Disk
-    [/^(sudo\s+)?df(\s+-[hTi]+)*(\s+\/\S*)*$/i, 'df (disk free)'],
-    [/^(sudo\s+)?du\s+-s?h\s+\/\S+(\s+2>\/dev\/null)?$/i, 'du (disk usage)'],
-    // Memory & CPU
-    [/^(sudo\s+)?free(\s+-[mghb])?$/i, 'free (memory)'],
-    [/^(sudo\s+)?vmstat(\s+\d+){0,2}$/i, 'vmstat (virtual memory stats)'],
-    [/^(sudo\s+)?uptime$/i, 'uptime'],
-    [/^(sudo\s+)?top\s+-bn\s*1(\s+\|\s*head\s+-\d+)?$/i, 'top (single snapshot)'],
-    // Service status
-    [/^(sudo\s+)?systemctl\s+status\s+[\w@.-]+(\s+--no-pager)?(\s+-l)?(\s+2>&1)?(\s+\|\s*sed\s+-n\s+'1,\d+p')?$/i, 'systemctl status [service]'],
-    [/^(sudo\s+)?systemctl\s+is-active\s+[\w@.-]+(\s+2>&1)?(\s+\|\|\s+true)?$/i, 'systemctl is-active'],
-    [/^(sudo\s+)?systemctl\s+is-enabled\s+[\w@.-]+(\s+2>&1)?$/i, 'systemctl is-enabled'],
-    [/^(sudo\s+)?systemctl\s+list-units(\s+--type=\w+)?(\s+--state=\w+)?(\s+--no-pager)?$/i, 'systemctl list-units'],
-    [/^(sudo\s+)?systemctl\s+list-unit-files(\s+--type=\w+)?(\s+--no-pager)?(\s+\|\s*grep\s+[\w.-]+)?$/i, 'systemctl list-unit-files'],
-    // Nginx
-    [/^(sudo\s+)?nginx\s+-t(\s+2>&1)?$/i, 'nginx -t (config test)'],
-    [/^(sudo\s+)?nginx\s+-T(\s+2>&1)?(\s+\|\s*head\s+-\d+)?$/i, 'nginx -T (dump config)'],
-    [/^(sudo\s+)?nginx\s+-v(\s+2>&1)?$/i, 'nginx -v (version)'],
-    [/^(sudo\s+)?nginx\s+-V(\s+2>&1)?$/i, 'nginx -V (version + config)'],
-    // Package & binary checks (which, command -v, dpkg, apt)
-    [/^(sudo\s+)?which\s+[\w.-]+$/i, 'which (locate binary)'],
-    [/^(sudo\s+)?command\s+-v\s+[\w.-]+$/i, 'command -v (locate command)'],
-    [/^(sudo\s+)?type\s+[\w.-]+$/i, 'type (locate command)'],
-    [/^(sudo\s+)?dpkg\s+-l(\s+[\w.*-]+)?(\s+2>&1)?(\s+\|\s*(grep|head|tail)\s+(-[a-zA-Z]+\s+)*[\w.*-]+)?$/i, 'dpkg -l (list packages)'],
-    [/^(sudo\s+)?dpkg\s+-s\s+[\w.-]+(\s+2>&1)?$/i, 'dpkg -s (package status)'],
-    [/^(sudo\s+)?dpkg\s+--get-selections(\s+\|\s*grep\s+[\w.-]+)?$/i, 'dpkg --get-selections'],
-    [/^(sudo\s+)?apt\s+list(\s+--installed)?(\s+2>\/dev\/null)?(\s+\|\s*grep\s+[\w.*-]+)?$/i, 'apt list (list packages)'],
-    [/^(sudo\s+)?apt-cache\s+(show|search|policy)\s+[\w.-]+$/i, 'apt-cache (package info)'],
-    [/^(sudo\s+)?rpm\s+-q[a-z]*\s+[\w.-]+$/i, 'rpm query (package info)'],
-    // Logs (read-only)
-    [/^(sudo\s+)?tail\s+-n\s*\d+\s+\/var\/log\/[\w./-]+$/i, 'tail log file'],
-    [/^(sudo\s+)?cat\s+\/var\/log\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'cat log file'],
-    [/^(sudo\s+)?cat\s+\/etc\/nginx\/[\w./-]+$/i, 'cat nginx config'],
-    [/^(sudo\s+)?cat\s+\/etc\/[\w./-]+$/i, 'cat /etc/ config file'],
-    [/^(sudo\s+)?head\s+-n?\s*\d+\s+\/var\/log\/[\w./-]+$/i, 'head log file'],
-    [/^(sudo\s+)?head\s+-n?\s*\d+\s+\/etc\/[\w./-]+$/i, 'head config file'],
-    [/^(sudo\s+)?grep\s+(-[a-zA-Z]+\s+)*'[^']*'\s+\/var\/log\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'grep log file'],
-    [/^(sudo\s+)?grep\s+(-[a-zA-Z]+\s+)*'[^']*'\s+\/etc\/[\w./-]+(\s+\|\s*(head|tail)\s+-\d+)?$/i, 'grep config file'],
-    [/^(sudo\s+)?journalctl\s+(-[a-zA-Z]+\s+)*(--no-pager\s+)?(-u\s+[\w@.-]+\s*)?(-n\s*\d+\s*)?(\s+--since\s+"[^"]+")?((\s+2>&1)?(\s+\|\s*(head|tail)\s+-\d+)?)?$/i, 'journalctl (journal logs)'],
-    // Crontab listing
-    [/^(sudo\s+)?crontab\s+-l(\s+-u\s+[\w-]+)?$/i, 'crontab -l (list)'],
-    // Process inspection
-    [/^(sudo\s+)?ps\s+(aux|ef)(\s+\|\s*grep\s+(-[a-zA-Z]+\s+)*[\w.-]+)?(\s+\|\s*grep\s+-v\s+grep)?$/i, 'ps (process list)'],
-    [/^(sudo\s+)?pgrep\s+(-[a-zA-Z]+\s+)*[\w.-]+$/i, 'pgrep (find process)'],
-    // Network
-    [/^(sudo\s+)?netstat\s+-[a-z]+(\s+2>\/dev\/null)?(\s+\|\s*head\s+-\d+)?$/i, 'netstat'],
-    [/^(sudo\s+)?ss\s+-[a-z]+(\s+2>\/dev\/null)?(\s+\|\s*(head|grep)\s+(-[a-zA-Z]+\s+)*[\w.-]*)?$/i, 'ss (socket stats)'],
-    [/^(sudo\s+)?dig\s+(\+short\s+)?[\w.-]+(\s+[A-Z]+)?$/i, 'dig (DNS lookup)'],
-    [/^(sudo\s+)?curl\s+-s[ILo]*\s+[\w:/.?&=-]+(\s+\|\s*(head|grep)\s+(-[a-zA-Z]+\s+)*[\w.-]*)?$/i, 'curl (HTTP check)'],
-    // PHP version
-    [/^(sudo\s+)?php[\d.]*\s+(--version|-v)$/i, 'php version check'],
-    // Config reads (safe)
-    [/^(sudo\s+)?nl\s+-ba\s+[\w/.+-]+(\s+\|\s*sed\s+-n\s+'\d+,\d+p')?$/i, 'nl (numbered cat)'],
-    [/^(sudo\s+)?ls\s+(-[a-zA-Z]+\s+)*\/[\w./-]+$/i, 'ls (directory listing)'],
-    [/^(sudo\s+)?wc\s+-l\s+[\w/.+-]+$/i, 'wc -l (line count)'],
-    [/^(sudo\s+)?find\s+\/etc\/[\w./-]*(\s+-name\s+"?[\w.*-]+"?)?(\s+-type\s+[fdl])?(\s+2>\/dev\/null)?(\s+\|\s*head\s+-\d+)?$/i, 'find in /etc/ (config discovery)'],
-    // MySQL safe reads
-    [/^(sudo\s+)?mysql\s+(-u\s*\w+\s+)?(--password=\S+\s+)?-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*"(\s+\w+)?$/i, 'mysql read-only query'],
-    // System identity
-    [/^(sudo\s+)?hostname(\s+-[fis])?$/i, 'hostname'],
-    [/^(sudo\s+)?uname(\s+-[a-z]+)*$/i, 'uname (system info)'],
-    [/^(sudo\s+)?whoami$/i, 'whoami'],
-    [/^(sudo\s+)?id(\s+\w+)?$/i, 'id (user info)'],
-    [/^(sudo\s+)?date(\s+[+-]+\S+)?$/i, 'date'],
-    [/^(sudo\s+)?timedatectl(\s+status)?$/i, 'timedatectl'],
-    // Docker (read-only)
-    [/^(sudo\s+)?docker\s+ps(\s+(-a|--all|--format\s+"[^"]+"))*$/i, 'docker ps (list containers)'],
-    [/^(sudo\s+)?docker\s+images(\s+--format\s+"[^"]+")?$/i, 'docker images'],
-    // Service version checks
-    [/^(sudo\s+)?[\w.-]+\s+(--version|-v|-V)(\s+2>&1)?$/i, 'version check (generic)'],
-    // SSL / certificate checks
-    [/^(sudo\s+)?openssl\s+s_client\s+-connect\s+[\w.-]+:\d+/i, 'openssl s_client (TLS check)'],
-    [/^(sudo\s+)?openssl\s+x509\s+-in\s+\/[\w./-]+\s+(-noout\s+)?(-text|-dates|-subject|-issuer|-serial)(\s+-noout)?$/i, 'openssl x509 (cert info)'],
-    [/^(sudo\s+)?certbot\s+certificates(\s+2>&1)?$/i, 'certbot certificates (list certs)'],
-    [/^(sudo\s+)?cat\s+\/etc\/(letsencrypt|ssl)\/[\w./-]+$/i, 'cat SSL/LE config'],
-    [/^(sudo\s+)?ls\s+(-[a-zA-Z]+\s+)*\/etc\/(letsencrypt|ssl)\/[\w./-]*$/i, 'ls SSL/LE directory'],
-    // WordPress CLI (read-only)
-    [/^(sudo\s+)?wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)(\s+--[\w=-]+)*(\s+--path=\/[\w./-]+)?$/i, 'wp-cli read-only commands'],
+const SSH_KEY_INJECTION_PATTERNS: Array<[RegExp, string]> = [
+    [/echo\s+.*(ssh-(rsa|ed25519|ecdsa|dss)|ecdsa-sha2)/i, 'SSH key addition is not permitted'],
+    [/>>?\s*~?\/?.*(authorized_keys|known_hosts|\.ssh\/)/i, 'SSH key addition is not permitted'],
+    [/cat\s+.*>+\s*.*authorized_keys/i, 'SSH key addition is not permitted'],
+    [/tee\s+.*authorized_keys/i, 'SSH key addition is not permitted'],
+    [/ssh-copy-id/i, 'SSH key addition is not permitted'],
+];
+
+const SENSITIVE_PATHS: Array<[RegExp, string]> = [
+    [/\/etc\/(shadow|gshadow|sudoers)/i, 'Reading highly sensitive system files is blocked'],
+    [/\.ssh\/(id_rsa|id_ed25519|id_dsa)/i, 'Reading private SSH keys is blocked'],
+];
+
+// ─── Whitelists ──────────────────────────────────────────────────────────────
+
+// Safe read-only / diagnostic utilities. Can be piped and used with any flag EXCEPT what is blocked above.
+const READ_SAFE_BINARIES = new Set([
+    'tail', 'cat', 'head', 'grep', 'zcat', 'zgrep', 'less', 'more', 'awk', 'sed', 'sort', 'uniq', 'wc', 'nl',
+    'ls', 'find', 'stat', 'file', 'du', 'df', 'tree',
+    'free', 'vmstat', 'uptime', 'top', 'ps', 'pgrep', 'lsof', 'last',
+    'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute',
+    'whoami', 'id', 'date', 'timedatectl', 'hostname', 'uname',
+    'which', 'command', 'type', 'php', // php is read safe if not executing scripts
+    'echo', 'printf', 'test', 'true', 'false',             // shell builtins — harmless output/logic
+    'basename', 'dirname', 'readlink', 'realpath',          // path utilities — read-only
+    'env', 'printenv',                                       // environment inspection
+    'cut', 'tr', 'tac', 'rev', 'column', 'xargs',          // text processing — read-only
+]);
+
+// For tools that have BOTH read and write subcommands (like systemctl or apt),
+// we fall back to strict regexes to ensure only read modes are accessed.
+const DUAL_PURPOSE_READ_REGEXES: Array<[RegExp, string]> = [
+    [/^(sudo\s+)?systemctl\s+(status|is-active|is-enabled|list-units|list-unit-files)\b.*$/i, 'systemctl safe read'],
+    [/^(sudo\s+)?journalctl\b.*$/i, 'journalctl read'],
+    [/^(sudo\s+)?nginx(?:-cs)?\s+-(t|T|v|V)\b.*$/i, 'nginx read/test'],
+    [/^(sudo\s+)?dpkg\s+(-l|-s|--get-selections)\b.*$/i, 'dpkg read'],
+    [/^(sudo\s+)?apt\s+list\b.*$/i, 'apt list'],
+    [/^(sudo\s+)?apt-cache\s+(show|search|policy)\b.*$/i, 'apt-cache read'],
+    [/^(sudo\s+)?rpm\s+-q\b.*$/i, 'rpm read'],
+    [/^(sudo\s+)?mysql\s+.*-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*".*$/i, 'mysql safe read'],
+    [/^(sudo\s+)?docker\s+(ps|images)\b.*$/i, 'docker safe read'],
+    [/^(sudo\s+)?[\w.-]+\s+(--version|-v|-V)\b.*$/i, 'version generic command'],
+    [/^(sudo\s+)?openssl\s+(s_client|x509)\b.*$/i, 'openssl safe read'],
+    [/^(sudo\s+)?certbot\s+certificates\b.*$/i, 'certbot read'],
+    [/^(sudo\s+)?wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)\b.*$/i, 'wp-cli safe read'],
+    [/^(sudo\s+)?crontab\s+-l\b.*$/i, 'crontab read'],
 ];
 
 // Lane 3: Emergency SSH Write Commands (require approval)
 const LANE3_WHITELIST: Array<[RegExp, string]> = [
     [/^(sudo\s+)?systemctl\s+(restart|reload)\s+[\w@.-]+$/i, 'Emergency service restart/reload'],
+    [/^(sudo\s+)?killall\s+-9\s+php/i, 'Emergency force-kill of hung PHP-FPM processes'],
+    [/^(sudo\s+)?chmod\s+(\+x|[0-7]{3,4})\s+\S+$/i, 'chmod on a script file to make it executable'],
+    [/^(sudo\s+)?mkdir\s+-p\s+\S+/i, 'Creating a directory path'],
 ];
 
-/**
- * Check whether a command is safe to run without approval.
- */
-// SSH key injection patterns — blocks adding/appending SSH keys via any command
-const SSH_KEY_INJECTION_PATTERNS: Array<[RegExp, string]> = [
-    [/echo\s+.*(ssh-(rsa|ed25519|ecdsa|dss)|ecdsa-sha2)/i, 'SSH key addition is not permitted via this interface. Manage SSH access directly on the server.'],
-    [/>>?\s*~?\/?.*(authorized_keys|known_hosts|\.ssh\/)/i, 'SSH key addition is not permitted via this interface. Manage SSH access directly on the server.'],
-    [/cat\s+.*>+\s*.*authorized_keys/i, 'SSH key addition is not permitted via this interface. Manage SSH access directly on the server.'],
-    [/tee\s+.*authorized_keys/i, 'SSH key addition is not permitted via this interface. Manage SSH access directly on the server.'],
-    [/ssh-copy-id/i, 'SSH key addition is not permitted via this interface. Manage SSH access directly on the server.'],
-];
+// ─── Core Filter Logic ────────────────────────────────────────────────────────
 
-export function checkCommand(command: string): FilterResult {
+export function checkCommand(command: string, isWriteTool: boolean = false): FilterResult {
     const trimmed = command.trim();
 
-    // 1. Hard block first (defense in depth) — check ENTIRE command string
+    // 1. Hard Block & Injection checks
     for (const [pattern, reason] of BLOCKED_PATTERNS) {
-        if (pattern.test(trimmed)) {
-            return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
-        }
+        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
     }
-
-    // 2. SSH key injection block — check ENTIRE command string
     for (const [pattern, reason] of SSH_KEY_INJECTION_PATTERNS) {
-        if (pattern.test(trimmed)) {
-            return { safe: false, reason };
+        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
+    }
+    for (const [pattern, reason] of SENSITIVE_PATHS) {
+        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
+    }
+
+    // Special case limitation for 'tail' length to prevent OOM
+    if (trimmed.includes('tail ') && trimmed.includes('-n ')) {
+        const match = trimmed.match(/tail\s+.*-n\s*(\d+)/i);
+        if (match && parseInt(match[1], 10) > 200) {
+            return { safe: false, reason: '🚫 BLOCKED: tail command exceeds maximum 200 lines limit' };
         }
     }
 
-    // 3. Split chained commands (&&, ||, ;) and check each sub-command
+    // If this is a designated write tool (like execute_ssh_write), it will require
+    // explicit HITL approval anyway. We just need to ensure the hard blocks pass.
+    if (isWriteTool) {
+        return { safe: true };
+    }
+
+    // 2. Split chained/piped commands to validate each segment
     const subCommands = trimmed
-        .split(/\s*(?:&&|\|\||;)\s*/)
+        .split(/\s*(?:&&|\|\||;|\|)\s*/)
         .map(s => s.trim())
         .filter(s => s.length > 0);
 
-    // Each sub-command must be in Lane 2 or Lane 3
     for (const sub of subCommands) {
         let subWhitelisted = false;
 
-        for (const [pattern] of LANE2_WHITELIST) {
-            if (pattern.test(sub)) {
-                if (sub.startsWith('tail -n ')) {
-                    const lines = parseInt(sub.split(' ')[2] ?? '0', 10);
-                    if (lines > 200) {
-                        return { safe: false, reason: '🚫 BLOCKED: tail command exceeds maximum 200 lines limit' };
-                    }
+        // Extract base binary (e.g. 'sudo tail -n 50' -> 'tail')
+        const tokens = sub.split(/\s+/);
+        let binary = tokens[0].toLowerCase();
+        if (binary === 'sudo' && tokens.length > 1) {
+            binary = tokens[1].toLowerCase();
+        }
+
+        // Layer A: Is it a universally safe read-only binary?
+        if (READ_SAFE_BINARIES.has(binary)) {
+            subWhitelisted = true;
+        } 
+        // Layer B: Is it a safe sub-command of a dual-purpose tool?
+        else {
+            for (const [pattern] of DUAL_PURPOSE_READ_REGEXES) {
+                if (pattern.test(sub)) {
+                    subWhitelisted = true;
+                    break;
                 }
-                subWhitelisted = true;
-                break;
             }
         }
 
+        // Layer C: Is it a Lane 3 emergency write operation?
         if (!subWhitelisted) {
             for (const [pattern] of LANE3_WHITELIST) {
                 if (pattern.test(sub)) {
@@ -204,17 +185,13 @@ export function checkCommand(command: string): FilterResult {
         }
 
         if (!subWhitelisted) {
-            return { safe: false, reason: `🚫 BLOCKED: Command is not in the approved Lane 2 or Lane 3 whitelist. See Operating Manual.` };
+            return { safe: false, reason: `🚫 BLOCKED: Binary '${binary}' is not recognized as a safe diagnostic tool or whitelist pattern.` };
         }
     }
 
     return { safe: true };
 }
 
-/**
- * Determine if a command requires Tier-3 human approval before execution.
- * Returns the reason string if approval is needed, null otherwise.
- */
 export function requiresApproval(command: string): string | null {
     const trimmed = command.trim();
     for (const [pattern, reason] of LANE3_WHITELIST) {
