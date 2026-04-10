@@ -185,7 +185,6 @@ const enableWebsiteBackupTool = buildTool({
             const result = await client.enableWebsiteBackup(
                 websiteId, serverId, userId(), {
                     backup_period: String(args.backup_period),
-                    retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
                     is_full_backup: args.is_full_backup !== false,
                     success_backup_email: args.success_backup_email === true,
                     failed_backup_email: args.failed_backup_email === true,
@@ -283,7 +282,6 @@ const enableDatabaseBackupTool = buildTool({
             const result = await client.enableDatabaseBackup(
                 String(args.database_id), String(args.server_id), userId(), {
                     backup_period: String(args.backup_period),
-                    retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
                     success_backup_email: args.success_backup_email === true,
                     failed_backup_email: args.failed_backup_email === true,
                 }

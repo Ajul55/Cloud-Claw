@@ -109,8 +109,9 @@ const DUAL_PURPOSE_READ_REGEXES: Array<[RegExp, string]> = [
     [/^(sudo\s+)?openssl\s+(s_client|x509)\b.*$/i, 'openssl safe read'],
     [/^(sudo\s+)?certbot\s+certificates\b.*$/i, 'certbot read'],
     [/^(sudo\s+)?ufw\s+(status|status\s+verbose|status\s+numbered)\s*$/i, 'ufw status read'],
-    [/^(sudo\s+)?csf\s+-g\s+[\d.:a-fA-F/]+\s*$/i, 'csf -g: check rules for IP'],
+    [/^(sudo\s+)?csf\s+-g\s+[\d.:a-fA-F/]+\b.*$/i, 'csf -g: check rules for IP'],
     [/^(sudo\s+)?csf\s+-l\b.*$/i, 'csf -l: list temp blocks'],
+    [/^(sudo\s+)?(ip6?tables)\s+-(L|nL|S)\b.*$/i, 'iptables read rules'],
     [/^(sudo\s+)?wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)\b.*$/i, 'wp-cli safe read'],
     [/^(sudo\s+)?crontab\s+(-u\s+[a-z0-9_-]+\s+)?-l\b.*$/i, 'crontab read'],
 ];
