@@ -5,7 +5,7 @@ export const diagnoseServicesTool: Tool = {
     name: 'diagnose_services',
     description:
         'Run a multi-service health check on a remote host. ' +
-        'Checks status of MariaDB, MySQL, PHP-FPM, Apache, Redis, and system resources (disk, memory, uptime). ' +
+        'Checks status of MariaDB, MySQL, Nginx-CS, PHP-FPM (8.1–8.5), Redis, CSF firewall, and system resources (disk, memory, uptime). ' +
         'Use this for broad server diagnostics or when the user says "everything is down" or "check all services".',
     parameters: {
         type: 'object',
@@ -25,20 +25,28 @@ export const diagnoseServicesTool: Tool = {
         }
 
         try {
-            const [services, disk, memory, uptime, listeners] = await Promise.all([
-                sshExec(host, 'systemctl status mariadb mysql nginx-cs redis-server php81cs-fpm php82cs-fpm php83cs-fpm php84cs-fpm 2>&1 | head -80'),
+            const [services, failedUnits, disk, memory, uptime, listeners, csfPorts, csfTempBlocks] = await Promise.all([
+                sshExec(host, 'systemctl status mariadb mysql nginx-cs apache2-cs redis-server pureftpd-cs php81cs-fpm php82cs-fpm php83cs-fpm php84cs-fpm php85cs-fpm 2>&1'),
+                sshExec(host, 'systemctl list-units --state=failed --no-pager 2>&1'),
                 sshExec(host, 'df -h 2>&1'),
                 sshExec(host, 'free -m 2>&1'),
                 sshExec(host, 'uptime 2>&1'),
                 sshExec(host, 'ss -tlnp 2>&1 | head -20'),
+                sshExec(host, 'grep -E "^(TCP_IN|TCP_OUT)" /etc/csf/csf.conf 2>/dev/null || echo "(csf.conf not found)"'),
+                sshExec(host, 'csf -l 2>&1 | head -20 || echo "(csf -l failed)"'),
             ]);
 
             const report = [
                 `Multi-service diagnostics for ${host}`,
                 '',
-                '1) Service Status:',
+                '1) Service Status (ALL PHP 8.1–8.5 + core services):',
                 '```',
                 services || '(no output)',
+                '```',
+                '',
+                '⚠️  Failed/Degraded Units:',
+                '```',
+                failedUnits || '(none)',
                 '```',
                 '',
                 '2) Disk Usage:',
@@ -59,6 +67,16 @@ export const diagnoseServicesTool: Tool = {
                 '5) Listening Ports:',
                 '```',
                 listeners || '(no output)',
+                '```',
+                '',
+                '6) CSF Firewall — Open Ports (TCP_IN/TCP_OUT):',
+                '```',
+                csfPorts || '(no output)',
+                '```',
+                '',
+                '7) CSF Temp Blocks (first 20):',
+                '```',
+                csfTempBlocks || '(none)',
                 '```',
             ].join('\n');
 

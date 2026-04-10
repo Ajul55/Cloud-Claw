@@ -239,7 +239,7 @@ export async function resumeApprovedSession(
     }
 
     // 6. Execute the tool NOW
-    await onReply(`⚙️ Proceeding — executing ${toolName} on \`${String(toolArgs.server_label ?? toolArgs.host ?? 'server')}\`...`);
+    await onReply(`⚙️ Running \`${toolName}\`…`);
 
     let result;
     try {
@@ -350,7 +350,12 @@ export async function resumeApprovedSession(
         `Use execute_ssh_command for non-nginx checks.`
         : '';
 
-    const continuationText = [serverContext, broadContinuation].filter(Boolean).join(' ');
+    // continuationText is ONLY set for broad queries that need follow-up checks.
+    // For specific tasks, the tool result is the final answer.
+    // Always include at least a summary prompt so the LLM does NOT get tool_choice:required
+    // from isMidChain=true — MiniMax returns empty choices when forced to call a tool
+    // after a final result with nothing left to do.
+    const continuationText = broadContinuation || '[SYSTEM] The approved action completed. Report the result to the Pilot now. Do not call any more tools unless the result indicates a follow-up is needed.';
 
     const resumedTools = new Set<string>();
     for (const msg of messages) {

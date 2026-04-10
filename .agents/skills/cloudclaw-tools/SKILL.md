@@ -39,7 +39,7 @@ const TOOLS: Tool[] = [
   fix_nginx_config,
   execute_ssh_command,
   discovery_agent,
-  myNewTool,       // ← add here
+  myNewTool,       // Use standard sshExec wrapper
 ];
 
 export function getLLMToolDefinitions(): OpenAI.ChatCompletionTool[] {
@@ -57,6 +57,32 @@ export function getToolByName(name: string): Tool | undefined {
   return TOOLS.find(t => t.name === name);
 }
 ```
+
+---
+
+## Cloudstick V2 API Standards
+
+When building tools that call the Cloudstick API, follow the **Resource-First** URL pattern. Legacy verb-first endpoints are deprecated.
+
+| Feature | V2 Endpoint Pattern | Legacy (Avoid) |
+|---|---|---|
+| **Cron** | `/cron/servers/${serverId}/users/${userId}` | `/cronjobs/websites/` |
+| **Databases** | `/database/servers/${serverId}/users/${userId}` | `/listdatabases/` |
+| **Cloudflare** | `/cloudflare/zones/users/${userId}` | `/listzones/` |
+| **Firewall** | `/firewall/servers/${serverId}/users/${userId}` | `/getfirewallstatus/` |
+
+**Rule**: Every tool using `CloudstickApiClient` must be verified against `Insomnia_latest.yaml` to ensure it targets the correct V2 route.
+
+---
+
+## SSH Forensic Standards
+
+Tools that perform OS-level diagnostics via SSH must adhere to:
+
+1. **Path Rewriting**: Always use Cloudstick-specific service names and paths (e.g., `nginx-cs`, `apache2-cs`, `/etc/php8.2cs/`).
+2. **Quota-Aware Parsing**: When processing log output, use the quote-aware parser logic in `command_filter.ts`.
+3. **Journalctl Forensics**: Use `journalctl -u <service> -n 100` for 502/503 service crashes.
+4. **CSF Native Commands**: Use the `csf` binary directly (e.g., `csf -g <ip>`) to query the firewall state.
 
 ---
 
@@ -107,6 +133,10 @@ export const my_tool = {
 
 The shared SSH utility is in `src/utils/ssh.ts`.
 Never duplicate SSH connection logic inside a tool.
+
+- **SSH Exec Pattern**: Standardized `sshExec` wrapper in `src/utils/ssh.ts`.
+- **API Pattern**: Cloudstick V2 Resource-First structure (`/resource/servers/` or `/resource/users/`).
+- **Base64 Pattern**: For writing file content to avoid string corruption.
 
 ```typescript
 import { sshExec } from '../utils/ssh.js';

@@ -38,6 +38,13 @@ import { checkCommand, requiresApproval, isWriteCommand } from '../security/comm
 import { classifyIntent, type Intent } from './intent_classifier.js';
 import { checkForHallucination } from './hallucination_guard.js';
 import { sanitizeToolOutput, checkWriteTarget } from './tool_guard.js';
+import {
+    recordAttempt,
+    getStrategyContext,
+    shouldEscalate,
+    getEscalationSummary,
+    clearSession as clearTroubleshootingSession,
+} from './troubleshooting_tracker.js';
 import { SYSTEM_PROMPT } from '../config/system_prompt.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { touchSession } from '../jobs/timeout_sessions.js';
@@ -46,6 +53,7 @@ import { trackUsage } from '../telemetry/usage_tracker.js';
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import {
     getAllServers,
+    type ServerNode,
     getServerByIp,
     getServerByLabel,
     resolveAllServers,
@@ -271,6 +279,17 @@ function toolSupportsServerRouting(tool: { parameters: { properties: Record<stri
         || Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'host');
 }
 
+export function hydrateServerToolArgs(
+    toolArgs: Record<string, unknown>,
+    server: Pick<ServerNode, 'id' | 'label' | 'ip'>
+): void {
+    toolArgs.server_label = server.label;
+    toolArgs.host = server.ip;
+    if (server.id) {
+        toolArgs.server_id = String(server.id);
+    }
+}
+
 export function intentRequiresServerTarget(intent: Pick<Intent, 'requiresTool' | 'toolHint'>): boolean {
     if (!intent.requiresTool) {
         return false;
@@ -285,6 +304,35 @@ export function intentRequiresServerTarget(intent: Pick<Intent, 'requiresTool' |
     }
 
     return toolSupportsServerRouting(hintedTool);
+}
+
+const EXISTING_WEBSITE_ATTACH_TOOLS = new Set(['add_subdomain', 'add_domain_to_website']);
+
+export function isNewWebsiteCreationRequest(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+
+    const asksToCreateSite = (
+        /\b(create|new|launch|spin\s*up|set\s*up|setup|build)\b/.test(normalized)
+        && /\b(website|site)\b/.test(normalized)
+    )
+        || /\bcreate_(wordpress|custom_php)_site\b/.test(normalized);
+
+    if (!asksToCreateSite) {
+        return false;
+    }
+
+    const explicitExistingSiteAttach = /\b(add|attach|alias|point|connect)\b/.test(normalized)
+        && /\b(subdomain|domain)\b/.test(normalized)
+        && /\b(existing|current)\b/.test(normalized);
+
+    const explicitAddSubdomainRequest = /\badd\s+(a\s+)?subdomain\b/.test(normalized)
+        || /\badd\s+domain\b/.test(normalized)
+        || /\battach\s+domain\b/.test(normalized);
+
+    return !explicitExistingSiteAttach && !explicitAddSubdomainRequest;
 }
 
 // ─── Fix #7: Simplified getToolApprovalRequest — registry lookup with fallback
@@ -325,6 +373,42 @@ function withTimeout(
             setTimeout(() => res({ success: false, output: `[${label}] Timed out after ${ms / 1000}s` }), ms)
         ),
     ]);
+}
+
+function summarizeLLMResponse(response: unknown): string {
+    if (response === null || response === undefined) {
+        return String(response);
+    }
+
+    if (typeof response !== 'object') {
+        return String(response);
+    }
+
+    try {
+        const record = response as Record<string, unknown>;
+        return JSON.stringify({
+            id: record.id,
+            object: record.object,
+            model: record.model,
+            choices: Array.isArray(record.choices) ? record.choices.length : record.choices,
+            error: record.error ?? null,
+        }).slice(0, 300);
+    } catch {
+        return '[unserializable response object]';
+    }
+}
+
+export function extractCompletionChoice(response: unknown): OpenAI.ChatCompletion.Choice {
+    const choices = (response as { choices?: OpenAI.ChatCompletion.Choice[] } | null | undefined)?.choices;
+    const choice = Array.isArray(choices) ? choices[0] : undefined;
+
+    if (!choice) {
+        throw new Error(
+            `LLM returned no choices. Provider payload preview: ${summarizeLLMResponse(response)}`,
+        );
+    }
+
+    return choice;
 }
 
 // ─── Fix #5: Extended stripEphemeralMessages ──────────────────────────────────
@@ -482,7 +566,8 @@ export async function runAgentLoop(
     if (message.text && !isResume) {
         // New user intent — start fresh, don't inherit receipts from previous conversation turns
         executionReceipts = new Map<string, ToolReceipt>();
-        console.log('[loop] New user intent detected — cleared previous receipts');
+        clearTroubleshootingSession(message.sessionId);
+        console.log('[loop] New user intent detected — cleared previous receipts and troubleshooting history');
     } else {
         executionReceipts = loadReceiptsFromSession(session?.receipts);
     }
@@ -543,15 +628,32 @@ export async function runAgentLoop(
 
     // ─── Fix #12: Server disambiguation for generic prompts ────────────────
     // Placed AFTER session sanitization so persisted messages are clean.
+    let resolvedServer = intent.targetServer !== 'unknown' ? intent.targetServer : null;
+    if (!resolvedServer && message.text) {
+        const serverFromText = await resolveServerFromMessage(message.text);
+        if (serverFromText) {
+            resolvedServer = serverFromText.label;
+            console.log(`[loop] Server resolved via deterministic fallback: ${resolvedServer}`);
+        }
+    }
+
     const isGenericWithoutServer = intentRequiresServerTarget(intent)
-        && (!intent.targetServer || intent.targetServer === 'unknown');
+        && (!resolvedServer || resolvedServer === 'unknown');
     if (intent.requiresServerClarification || isGenericWithoutServer) {
         const allServers = await getAllServers();
         if (allServers.length > 1 && isGenericWithoutServer) {
-            const serverList = allServers.map(s => `• ${s.label} (${s.ip})`).join('\n');
-            await onReply(
-                `Which server should I run this on?\n${serverList}\n\nReply with the server name (e.g. "production" or "test").`
-            );
+            if (message.channel === 'slack') {
+                const { buildServerSelectionBlocks } = await import('../hitl/interactive_messages.js');
+                await onReply(
+                    'Which server should I run this on?',
+                    { blocks: buildServerSelectionBlocks(allServers) }
+                );
+            } else {
+                const serverList = allServers.map(s => `• ${s.label} (${s.ip})`).join('\n');
+                await onReply(
+                    `Which server should I run this on?\n${serverList}\n\nReply with the server name (e.g. "production" or "test").`
+                );
+            }
             await upsertSession({
                 id: message.sessionId,
                 channel: message.channel,
@@ -604,7 +706,8 @@ export async function runAgentLoop(
 
     const shouldPauseForClarification = recentToolFailures >= 3
         && !message.resumedTools
-        && !intent.isApprovalResponse;
+        && !intent.isApprovalResponse
+        && !message.isProceedClarification;
 
     // Fix #10: clarification injected via SYSTEM_PROMPT parameter, not prepended
     const clarificationBlock = shouldPauseForClarification
@@ -614,6 +717,27 @@ export async function runAgentLoop(
 Recent tool attempts:
 ${priorToolLines || 'No prior tool outputs recorded.'}`
         : undefined;
+
+    // Slack: show interactive Proceed/Cancel card and pause the loop.
+    // Telegram: fall through to the while-loop where the LLM generates its own text summary.
+    if (shouldPauseForClarification && message.channel === 'slack') {
+        const { buildClarificationBlocks } = await import('../hitl/interactive_messages.js');
+        await onReply(
+            '🔍 Multiple tool attempts have failed. Review before continuing:',
+            { blocks: buildClarificationBlocks(priorToolLines || 'No prior tool outputs recorded.') }
+        );
+        await upsertSession({
+            id: message.sessionId,
+            channel: message.channel,
+            user_id: message.userId,
+            reply_target: message.replyTarget ?? session?.reply_target ?? null,
+            messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+            receipts: serializeReceipts(executionReceipts),
+            iteration,
+        });
+        await indicator?.stop(true);
+        return;
+    }
 
     let cloudstickServersStr: string | undefined = undefined;
     const { getCloudstickUser } = await import('../api/cloudstick_context.js');
@@ -639,12 +763,14 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
 
         // Fix #11: Base prompt is built inside the loop so clarification block stays fresh
+        const troubleshootingContext = getStrategyContext(message.sessionId);
         const baseSystemPrompt = SYSTEM_PROMPT({
             sshHost: '139.84.130.63',
             sshUser: 'root',
             pastFixes: pastFixesStr || undefined,
             clarificationBlock,
             cloudstickServers: cloudstickServersStr,
+            troubleshootingContext,
         });
 
         // Fix #8: rebuild nginx hint per-iteration so it only appears when no tools have run
@@ -751,15 +877,15 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 } else if (msg.role === 'tool') {
                     if (!msg.tool_call_id || !trimmedValidToolIds.has(msg.tool_call_id)) {
                         console.warn(`[loop] Dropping orphaned tool message from trimmed window with ID ${msg.tool_call_id}`);
-                        return false; 
+                        return false;
                     }
                 }
                 return true;
             });
 
             console.log(`[loop] Outgoing messages to API (trimmed from ${messages.length} to ${trimmedMessages.length})`);
-            
-            const response = await openai.chat.completions.create({
+
+            let response = await openai.chat.completions.create({
                 model: activeModel,
                 messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
                 tools: toolDefinitions,
@@ -767,7 +893,23 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 temperature: 0.2,
             });
             reqLatency = Date.now() - reqStart;
-            choice = response.choices[0];
+
+            // Retry once if provider returned empty choices (e.g. MiniMax content filter / rate limit)
+            // Relax tool_choice to 'auto' in case the forced tool was the trigger.
+            if (!Array.isArray((response as any).choices) || (response as any).choices.length === 0) {
+                console.warn('[loop] Provider returned empty choices — retrying once with tool_choice: auto');
+                await new Promise(res => setTimeout(res, 1500));
+                response = await openai.chat.completions.create({
+                    model: activeModel,
+                    messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
+                    tools: toolDefinitions,
+                    tool_choice: 'auto',
+                    temperature: 0.2,
+                });
+                reqLatency = Date.now() - reqStart;
+            }
+
+            choice = extractCompletionChoice(response);
 
             // Handle usage tracking
             const usage = response.usage;
@@ -938,13 +1080,18 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             });
                             continue;
                         }
-                        toolArgs.server_label = server.label;
-                        toolArgs.host = server.ip;
+                        hydrateServerToolArgs(toolArgs, server);
                     } else if (explicitHost) {
                         const server = await getServerByIp(explicitHost);
                         if (server) {
-                            toolArgs.server_label = server.label;
-                            toolArgs.host = server.ip;
+                            hydrateServerToolArgs(toolArgs, server);
+                        }
+                    } else if (resolvedServer && resolvedServer !== 'unknown') {
+                        const server = await getServerByLabel(resolvedServer)
+                            ?? await getServerByIp(resolvedServer);
+                        if (server) {
+                            hydrateServerToolArgs(toolArgs, server);
+                            console.log(`[loop] Hydrated tool target from user intent: ${server.label} (${server.ip})`);
                         }
                     } else {
                         // No server explicitly specified by the LLM
@@ -994,6 +1141,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     role: 'tool',
                     tool_call_id: toolCall.id,
                     content: 'Error: Write operations must target a single registered server.',
+                });
+                continue;
+            }
+
+            if (
+                EXISTING_WEBSITE_ATTACH_TOOLS.has(toolName)
+                && isNewWebsiteCreationRequest(message.text ?? '')
+            ) {
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    content: 'BLOCKED: The user asked to create a NEW website. Do not use add_subdomain or add_domain_to_website for that. '
+                        + 'A full domain like "amru.ajul.site" must be treated as a separate website, not attached under an existing site. '
+                        + 'Ask for the stack if it is missing, then use create_wordpress_site or create_custom_php_site.',
                 });
                 continue;
             }
@@ -1059,16 +1220,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     content: `Approval requested (ID: ${saved.id}). Tool execution is paused until the user proceeds or rejects.`,
                 });
 
-                await onReply(
-                    '🔐 *Approval Required*\n\n'
-                    + `Target: \`${toolApproval.targetHost}\`\n`
-                    + `${toolApproval.rationale}\n`
-                    + 'Please click *Proceed* or *Reject* on the card above.\n'
-                    + '_If no card appeared, the approval system has an error — check the server logs._'
-                );
-
-                await indicator?.update('⏳ Awaiting your decision (Proceed/Reject)...');
-                await indicator?.stop(true);
+                await indicator?.stop();
 
                 // FIX BUG (tool id not found): Satisfy any remaining tool calls in this batch
                 // before pausing, otherwise the LLM API throws 400 on resume.
@@ -1160,14 +1312,6 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         tool_call_id: toolCall.id,
                         content: `Approval requested (ID: ${saved.id}). Command execution is paused until the user approves or rejects.`,
                     });
-
-                    await onReply(
-                        '🔐 *Approval Required*\n\n'
-                        + `Target: \`${targetHost}\`\n`
-                        + `${approvalReason}\n`
-                        + 'Please click *Proceed* or *Reject* on the card above.\n'
-                        + '_If no card appeared, the approval system has an error — check the server logs._'
-                    );
 
                     await indicator?.update("⏳ Awaiting Pilot approval...");
                     await indicator?.stop(true);
@@ -1331,6 +1475,9 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             // Fix #4: increment tool count in Map
             currentLegCounts.set(toolName, (currentLegCounts.get(toolName) ?? 0) + 1);
 
+            // Adaptive troubleshooting: record this attempt for strategy tracking
+            recordAttempt(message.sessionId, toolName, toolArgs, result.success, sanitizedOutput || result.output);
+
             const toolOutputForMessage = sanitizedOutput.length > 0
                 ? sanitizedOutput
                 : '[Tool returned empty output]';
@@ -1447,8 +1594,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                                 + 'Please click *Proceed* or *Reject* on the card above.'
                             );
 
-                            await indicator?.update('⏳ Awaiting your decision (Proceed/Reject)...');
-                            await indicator?.stop(true);
+                            await indicator?.stop();
 
                             // FIX BUG: Satisfy any remaining tool calls in this batch
                             for (const remaining of choice.message.tool_calls) {
@@ -1524,6 +1670,16 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     }
                 }
             }
+        }
+
+        // ─── Adaptive escalation: stop if troubleshooting is stuck ─────────
+        if (shouldEscalate(message.sessionId)) {
+            console.warn('[loop] Troubleshooting tracker triggered escalation — strategies exhausted or too many consecutive failures');
+            await indicator?.stop();
+            const escalation = getEscalationSummary(message.sessionId);
+            messages.push({ role: 'assistant', content: escalation });
+            await onReply(escalation);
+            break;
         }
 
         // Loop continues for another LLM call with tool results

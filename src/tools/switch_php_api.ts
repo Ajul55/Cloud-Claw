@@ -1,8 +1,8 @@
 /**
- * PHP Version Switch Tool — Phase 3 (Lane 1: Cloudstick API)
+ * PHP Version Switch Tool — V2 API
  *
- * Switches the PHP version for a website using the Cloudstick API (not SSH).
- * Includes post-switch verification. approvalTier: 3 (HITL).
+ * Uses changePhpVersion (PATCH) to switch PHP version.
+ * Current version is read from listWebsitesByServer since getPhpVersion (legacy) was removed.
  */
 
 import type { Tool } from './types.js';
@@ -13,6 +13,18 @@ import { env } from '../config/env.js';
 const userId = () => getCloudstickUser()?.cloudstick_user_id
     ?? env.CLOUDSTICK_USER_ID
     ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
+
+async function getCurrentPhpVersion(websiteId: string, serverId: string, uid: string): Promise<string | null> {
+    try {
+        const client = getCloudstickClient();
+        const response: any = await client.listWebsitesByServer(serverId, uid);
+        const websites: unknown[] = response?.message?.Websites ?? response?.data ?? [];
+        const website = websites.find((w: any) => String(w.id) === String(websiteId)) as any;
+        return website?.php_version ?? website?.phpVersion ?? null;
+    } catch {
+        return null;
+    }
+}
 
 export const switchPhpApiTool: Tool = {
     name: 'switch_php_api',
@@ -37,9 +49,8 @@ export const switchPhpApiTool: Tool = {
         `This will switch PHP to version ${args.php_version} for ${args.domain ?? 'this website'} on server ${args.server_label ?? args.server_id}. This may cause downtime if the site is not compatible.`,
     getCurrentState: async (args) => {
         try {
-            const client = getCloudstickClient();
-            const version = await client.getPhpVersion(String(args.website_id), String(args.server_id), userId());
-            return JSON.stringify(version);
+            const version = await getCurrentPhpVersion(String(args.website_id), String(args.server_id), userId());
+            return JSON.stringify({ php_version: version });
         } catch { return '{}'; }
     },
     execute: async (args) => {
@@ -49,31 +60,23 @@ export const switchPhpApiTool: Tool = {
 
         try {
             const client = getCloudstickClient();
+            const uid = userId();
 
-            // Check current version first
-            let currentVersion: any;
-            try {
-                currentVersion = await client.getPhpVersion(websiteId, serverId, userId());
-            } catch { currentVersion = null; }
+            const currentVersion = await getCurrentPhpVersion(websiteId, serverId, uid);
 
-            // Switch
-            const result = await client.switchPhpVersion(websiteId, serverId, userId(), { php_version: phpVersion });
+            const result = await client.changePhpVersion(websiteId, serverId, uid, phpVersion);
 
-            // Post-switch verification
-            let newVersion: any;
-            try {
-                newVersion = await client.getPhpVersion(websiteId, serverId, userId());
-            } catch { newVersion = null; }
+            const newVersion = await getCurrentPhpVersion(websiteId, serverId, uid);
 
             const verificationStatus = newVersion
-                ? `Post-switch verification: PHP is now ${JSON.stringify(newVersion)}`
+                ? `Post-switch verification: PHP is now ${newVersion}`
                 : 'Post-switch verification: Could not verify — check manually.';
 
             return {
                 success: true,
                 output: [
                     `PHP version switched to ${phpVersion}.`,
-                    `Previous: ${currentVersion ? JSON.stringify(currentVersion) : 'unknown'}`,
+                    `Previous: ${currentVersion ?? 'unknown'}`,
                     `API response: ${JSON.stringify(result, null, 2)}`,
                     verificationStatus,
                 ].join('\n'),

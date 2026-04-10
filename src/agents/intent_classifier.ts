@@ -63,6 +63,9 @@ Output: {"requiresTool":true,"toolHint":"get_wordpress_details","isAudit":true,"
 User: "fix nginx on test"
 Output: {"requiresTool":true,"toolHint":"diagnose_nginx","isAudit":false,"targetServer":"test","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
 
+User: "• mail-server (65.20.79.171)"
+Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"mail-server","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+
 User: "do it"
 Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"unknown","domains":[],"isApprovalResponse":true,"needsClarification":false,"confidence":1.0}
 

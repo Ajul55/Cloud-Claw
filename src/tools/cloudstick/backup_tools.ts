@@ -142,6 +142,11 @@ const enableWebsiteBackupTool = buildTool({
                 enum: [...BACKUP_PERIODS],
                 description: 'Backup frequency. Examples: "1 HR", "6 HR", "24 HR", "1 WK"',
             },
+            retention_period: {
+                type: 'string',
+                enum: ['1 HR', '2 HR', '4 HR', '6 HR', '12 HR', '24 HR', '1 WK', '1 MO'],
+                description: 'How long to retain backups. Default: "24 HR". Examples: "6 HR", "24 HR", "1 WK"',
+            },
             is_full_backup: { type: 'boolean', description: 'Perform full backup (including all files). Default: true' },
             success_backup_email: { type: 'boolean', description: 'Send email on successful backup. Default: false' },
             failed_backup_email: { type: 'boolean', description: 'Send email on failed backup. Default: false' },
@@ -156,22 +161,37 @@ const enableWebsiteBackupTool = buildTool({
             website: String(args.website),
             server_id: String(args.server_id),
             backup_period: String(args.backup_period),
+            retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Enable ${args.backup_period} automatic backups for ${args.website}.`,
+        rationale: `Enable ${args.backup_period} automatic backups for ${args.website} (retention: ${args.retention_period ?? '24 HR'}).`,
     }),
     handler: async (args) => {
+        const websiteId = String(args.website);
+        const serverId = String(args.server_id);
+
+        // Validate: website ID must be numeric (Cloudstick uses integer IDs, not domain names)
+        if (!/^\d+$/.test(websiteId)) {
+            return {
+                success: false,
+                output: `Invalid website ID "${websiteId}". Website ID must be a numeric Cloudstick ID (e.g. "820"). ` +
+                    `Use get_cloudstick_websites to find the correct numeric ID for your website. ` +
+                    `Do NOT use domain names like "ajul.site" — use the numeric ID from the Cloudstick website list.`,
+            };
+        }
+
         try {
             const client = getCloudstickClient();
             const result = await client.enableWebsiteBackup(
-                String(args.website), String(args.server_id), userId(), {
+                websiteId, serverId, userId(), {
                     backup_period: String(args.backup_period),
+                    retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
                     is_full_backup: args.is_full_backup !== false,
                     success_backup_email: args.success_backup_email === true,
                     failed_backup_email: args.failed_backup_email === true,
                 }
             );
-            return { success: true, output: `Website backup enabled for ${args.website} (${args.backup_period}).\n${JSON.stringify(result, null, 2)}` };
+            return { success: true, output: `Website backup enabled for ${args.website} (${args.backup_period}, retention ${args.retention_period ?? '24 HR'}).\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to enable website backup: ${err instanceof Error ? err.message : String(err)}` };
         }
@@ -234,6 +254,11 @@ const enableDatabaseBackupTool = buildTool({
                 enum: [...BACKUP_PERIODS],
                 description: 'Backup frequency. Examples: "1 HR", "6 HR", "24 HR", "1 WK"',
             },
+            retention_period: {
+                type: 'string',
+                enum: ['1 HR', '2 HR', '4 HR', '6 HR', '12 HR', '24 HR', '1 WK', '1 MO'],
+                description: 'How long to retain backups. Default: "24 HR"',
+            },
             success_backup_email: { type: 'boolean', description: 'Send email on successful backup. Default: false' },
             failed_backup_email: { type: 'boolean', description: 'Send email on failed backup. Default: false' },
         },
@@ -247,9 +272,10 @@ const enableDatabaseBackupTool = buildTool({
             database_id: String(args.database_id),
             server_id: String(args.server_id),
             backup_period: String(args.backup_period),
+            retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Enable ${args.backup_period} automatic database backups for DB ${args.database_id}.`,
+        rationale: `Enable ${args.backup_period} automatic database backups for DB ${args.database_id} (retention: ${args.retention_period ?? '24 HR'}).`,
     }),
     handler: async (args) => {
         try {
@@ -257,11 +283,12 @@ const enableDatabaseBackupTool = buildTool({
             const result = await client.enableDatabaseBackup(
                 String(args.database_id), String(args.server_id), userId(), {
                     backup_period: String(args.backup_period),
+                    retention_period: args.retention_period ? String(args.retention_period) : '24 HR',
                     success_backup_email: args.success_backup_email === true,
                     failed_backup_email: args.failed_backup_email === true,
                 }
             );
-            return { success: true, output: `Database backup enabled for ${args.database_id} (${args.backup_period}).\n${JSON.stringify(result, null, 2)}` };
+            return { success: true, output: `Database backup enabled for ${args.database_id} (${args.backup_period}, retention ${args.retention_period ?? '24 HR'}).\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to enable database backup: ${err instanceof Error ? err.message : String(err)}` };
         }

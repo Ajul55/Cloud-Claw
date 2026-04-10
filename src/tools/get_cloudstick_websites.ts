@@ -48,11 +48,8 @@ export const getCloudstickWebsitesTool: Tool = {
 
             // 2. SSH-based discovery — always attempt as it's more reliable
             try {
-                const [nginxSites, apacheSites, webRoots] = await Promise.all([
+                const [nginxSites, webRoots] = await Promise.all([
                     sshExec(server.ip, 'ls -la /etc/nginx-cs/vhosts.d/ 2>/dev/null || echo "(no nginx-cs vhosts)"', {
-                        user: server.sshUser, port: server.sshPort
-                    }),
-                    sshExec(server.ip, 'ls -la /etc/apache2/sites-enabled/ 2>/dev/null || echo "(no apache sites-enabled)"', {
                         user: server.sshUser, port: server.sshPort
                     }),
                     sshExec(server.ip, 'ls -d /home/*/apps/*/ 2>/dev/null || ls -d /home/cloudstick/apps/*/ 2>/dev/null || echo "(no web roots found)"', {
@@ -62,8 +59,6 @@ export const getCloudstickWebsitesTool: Tool = {
 
                 parts.push('\n=== Nginx Sites Enabled ===');
                 parts.push(nginxSites);
-                parts.push('\n=== Apache Sites Enabled ===');
-                parts.push(apacheSites);
                 parts.push('\n=== Web Root Directories ===');
                 parts.push(webRoots);
 

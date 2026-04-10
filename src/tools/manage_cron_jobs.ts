@@ -1,8 +1,12 @@
 /**
- * Cron Job Management Tools — Phase 4
+ * Cron Job Management Tools — V2 Server-Level API
  *
- * Provides tools for listing and managing cron jobs on Cloudstick-managed
- * servers. List is read-only (Tier 1), create/delete are Tier 3 (HITL).
+ * Refactored from website-level V1 endpoints to server-level V2 endpoints:
+ *   GET    /cron/servers/{serverId}/users/{userId}
+ *   POST   /cron/servers/{serverId}/users/{userId}
+ *   DELETE /cron/{cronId}/servers/{serverId}/users/{userId}
+ *
+ * `website_id` is no longer required or used.
  */
 
 import type { Tool } from './types.js';
@@ -20,22 +24,21 @@ const userId = () => getCloudstickUser()?.cloudstick_user_id
 export const listCronJobsTool: Tool = {
     name: 'list_cron_jobs',
     description:
-        'List all cron jobs configured for a website on a Cloudstick-managed server. ' +
-        'This is a read-only API call (Lane 1).',
+        'List all cron jobs configured on a Cloudstick-managed server (V2 server-level API). ' +
+        'This is a read-only call. Use this before creating or deleting cron jobs to get existing IDs.',
     parameters: {
         type: 'object',
         properties: {
-            website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
+            server_label: { type: 'string', description: 'Human-readable server label (for context only)' },
         },
-        required: ['website_id', 'server_id'],
+        required: ['server_id'],
     },
     approvalTier: 1,
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            const result = await client.listCronJobs(String(args.website_id), String(args.server_id), userId());
+            const result = await client.listServerCronJobs(String(args.server_id), userId());
             return { success: true, output: `Cron jobs:\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to list cron jobs: ${err instanceof Error ? err.message : String(err)}` };
@@ -47,45 +50,58 @@ export const listCronJobsTool: Tool = {
 
 export const createCronJobTool: Tool = {
     name: 'create_cron_job',
-    description: 'Create a new cron job for a website via the Cloudstick API. Requires HITL approval.',
+    description:
+        'Create a new server-level cron job via the Cloudstick V2 API. Requires HITL approval. ' +
+        'Parameters: user_name (OS user), label (human name), binary (e.g. php), path (script path), schedule (cron expression).',
     parameters: {
         type: 'object',
         properties: {
-            website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
-            command: { type: 'string', description: 'The command the cron job should execute' },
-            schedule: { type: 'string', description: 'Cron schedule expression (e.g. "0 * * * *" for hourly)' },
+            server_label: { type: 'string', description: 'Human-readable server label (for approval card)' },
+            user_name: { type: 'string', description: 'OS user that will run the cron job (e.g. "www-data", "root")' },
+            label: { type: 'string', description: 'Human-readable name for this cron job (e.g. "Daily backup")' },
+            binary: { type: 'string', description: 'Executable to run (e.g. "php", "bash", "/usr/bin/python3")' },
+            path: { type: 'string', description: 'Path to the script or file to execute (e.g. "/home/sites/example.com/artisan")' },
+            schedule: { type: 'string', description: 'Cron schedule expression (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 min)' },
         },
-        required: ['website_id', 'server_id', 'command', 'schedule'],
+        required: ['server_id', 'user_name', 'label', 'binary', 'path', 'schedule'],
     },
     approvalTier: 3,
     getRationale: (args) =>
-        `This will create a new cron job running "${args.command}" on schedule "${args.schedule}" on server ${args.server_label ?? args.server_id}.`,
+        `Create cron job "${args.label}" — runs "${args.binary} ${args.path}" as ${args.user_name} on schedule "${args.schedule}" on server ${args.server_label ?? args.server_id}.`,
     getApprovalRequest: (args) => ({
         command: encodeToolApprovalCommand('create_cron_job', {
-            website_id: String(args.website_id),
             server_id: String(args.server_id),
             server_label: String(args.server_label ?? ''),
-            command: String(args.command),
+            user_name: String(args.user_name),
+            label: String(args.label),
+            binary: String(args.binary),
+            path: String(args.path),
             schedule: String(args.schedule),
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Create cron job: "${args.schedule} ${args.command}".`,
+        rationale: `Create cron job "${args.label}": ${args.schedule} → ${args.binary} ${args.path} (as ${args.user_name}).`,
     }),
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
-            const jobs = await client.listCronJobs(String(args.website_id), String(args.server_id), userId());
+            const jobs = await client.listServerCronJobs(String(args.server_id), userId());
             return JSON.stringify(jobs);
         } catch { return '[]'; }
     },
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            const result = await client.createCronJob(
-                String(args.website_id), String(args.server_id), userId(),
-                { command: String(args.command), schedule: String(args.schedule) }
+            const result = await client.createServerCronJob(
+                String(args.server_id),
+                userId(),
+                {
+                    user_name: String(args.user_name),
+                    label: String(args.label),
+                    binary: String(args.binary),
+                    path: String(args.path),
+                    schedule: String(args.schedule),
+                }
             );
             return { success: true, output: `Cron job created.\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
@@ -98,35 +114,37 @@ export const createCronJobTool: Tool = {
 
 export const deleteCronJobTool: Tool = {
     name: 'delete_cron_job',
-    description: 'Delete a cron job from a website via the Cloudstick API. Requires HITL approval.',
+    description:
+        'Delete a server-level cron job by ID via the Cloudstick V2 API. Requires HITL approval. ' +
+        'Use list_cron_jobs first to get the cron job ID.',
     parameters: {
         type: 'object',
         properties: {
-            cron_id: { type: 'string', description: 'The Cloudstick cron job ID to delete' },
-            website_id: { type: 'string', description: 'Cloudstick website ID' },
+            cron_id: { type: 'string', description: 'The Cloudstick cron job ID to delete (get from list_cron_jobs)' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
+            server_label: { type: 'string', description: 'Human-readable server label (for approval card)' },
         },
-        required: ['cron_id', 'website_id', 'server_id'],
+        required: ['cron_id', 'server_id'],
     },
     approvalTier: 3,
     getRationale: (args) =>
-        `This will delete cron job ${args.cron_id} from server ${args.server_label ?? args.server_id}.`,
+        `Delete cron job ${args.cron_id} from server ${args.server_label ?? args.server_id}.`,
     getApprovalRequest: (args) => ({
         command: encodeToolApprovalCommand('delete_cron_job', {
             cron_id: String(args.cron_id),
-            website_id: String(args.website_id),
             server_id: String(args.server_id),
             server_label: String(args.server_label ?? ''),
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Delete cron job ${args.cron_id}.`,
+        rationale: `Delete cron job ID ${args.cron_id}.`,
     }),
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            const result = await client.deleteCronJob(
-                String(args.cron_id), String(args.website_id), String(args.server_id), userId()
+            const result = await client.deleteServerCronJob(
+                String(args.cron_id),
+                String(args.server_id),
+                userId()
             );
             return { success: true, output: `Cron job deleted.\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {

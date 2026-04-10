@@ -147,7 +147,8 @@ export async function loadWebsiteDetailCandidates(context: ResolvedWebsiteContex
     const client = getCloudstickClient();
     const type = normalizeKey(context.websiteType ?? '');
 
-    const detailCalls: Array<Promise<unknown>> = [client.getPhpVersion(context.websiteId, context.serverId, userId)];
+    // PHP version is included in context.raw (from listWebsitesByServer); no separate call needed.
+    const detailCalls: Array<Promise<unknown>> = [];
 
     if (!type || type.includes('wordpress') || type.includes('woocommerce')) {
         detailCalls.push(client.getWordpressDetails(context.websiteId, context.serverId, userId));

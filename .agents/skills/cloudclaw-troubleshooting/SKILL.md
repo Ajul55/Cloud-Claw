@@ -7,7 +7,9 @@ description: "Read this when CloudClaw is not working as expected. Covers every 
 
 ## How to Diagnose Quickly
 
-Always check terminal logs first. The most important log lines:
+Always check terminal logs and Cloudstick internal logs first. The most important logs:
+
+**1. Terminal Output:**
 
 ```
 ✅ Working correctly:
@@ -23,6 +25,11 @@ Always check terminal logs first. The most important log lines:
 ❌ Tool forced but LLM avoided:
 [loop] LLM avoided tool call despite tool_choice required
 ```
+
+**2. Internal Cloudstick Logs (/var/log/cloudstick/):**
+- Use `read_cloudstick_logs` to check `agent.log`, `cron.log`, or `backup.log`.
+- Look for silent errors where the API returns 200 but the OS operation failed.
+- **Rule T-18**: Mandatory log inspection if an API call reports success but state remains unchanged.
 
 ---
 
@@ -264,6 +271,30 @@ const trimmed = messages.length > MAX_HISTORY
   : messages;
 // Use trimmed instead of messages in the LLM call
 ```
+
+---
+
+## NEW: SRE Forensic Rules (The "Cloudstick Standard")
+
+### Rule T-17: Firewall Integrity (CSF)
+Before reporting an IP as "not blocked" or "whitelisted," the AI MUST run `csf -g <ip>`.
+- If the output shows the IP in `/etc/csf/csf.deny`, it is BLOCKED regardless of what `iptables` might suggest.
+- If the output shows the IP in `/etc/csf/csf.allow`, it is WHITELISTED.
+- **Tools**: `manage_csf_firewall` (diagnose mode).
+
+### Rule T-18: Silent Failure Audit
+When a Cloudstick API tool (e.g., `create_cron_job`, `create_database`) returns `success: true`, but the expected state (crontab entry, database user) is not found via SSH, the AI MUST use `read_cloudstick_logs` to inspect `/var/log/cloudstick/agent.log`.
+- Cloudstick often queues operations; success means "queued," not "completed on disk."
+
+### Rule T-19: FTP Forensic Chain (Pure-FTPd)
+Standard diagnostics for `pureftpd-cs`:
+1. Check process: `systemctl status pureftpd-cs`
+2. Check port 21: `netstat -plnt | grep :21`
+3. Audit passive ports: Inspect `/etc/csf/csf.conf` for matching `TCP_IN` ports (default 30000:35000).
+
+### Rule T-20: PHP Pool Forensics (502 Investigation)
+If a website returns 502, but `systemctl status phpX.Xcs-fpm` is `active`, the AI MUST run `diagnose_php_pool`.
+- Common cause: Missing socket file due to pools being renamed or disabled in `/etc/phpX.Xcs/fpm-pools.d/`.
 
 ---
 

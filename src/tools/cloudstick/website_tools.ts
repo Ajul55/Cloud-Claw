@@ -253,7 +253,7 @@ export const createWordPressSiteTool: Tool = {
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            const result = await client.createWordPressSite(
+            const { messages, final: lastMsg } = await client.createWordPressSite(
                 String(args.server_id), userId(),
                 {
                     email: String(args.email),
@@ -267,9 +267,41 @@ export const createWordPressSiteTool: Tool = {
                     web_app_server: String(args.web_app_server),
                 }
             );
-            return { success: true, output: `WordPress site "${args.site_title}" created at ${args.domain}.\n${JSON.stringify(result, null, 2)}` };
+
+            // Empty response = WS connected but server sent nothing useful
+            if (messages.length === 0) {
+                return {
+                    success: false,
+                    output: `WordPress site creation FAILED: WebSocket connected but received 0 messages. `
+                        + `The Cloudstick API may not support WordPress creation via this endpoint. `
+                        + `Server ID: ${args.server_id}. Domain: ${args.domain}. `
+                        + `Report this failure to the Pilot. Do NOT attempt SSH-based workarounds or verification.`,
+                };
+            }
+
+            const allText = messages.join('\n');
+            const hasError = /error|fail|denied|not allowed|unauthorized|already exists/i.test(allText)
+                && !/success|completed|created/i.test(allText);
+
+            const finalStr = typeof lastMsg === 'string' ? lastMsg : JSON.stringify(lastMsg, null, 2);
+            const summary = [
+                hasError
+                    ? `RESULT: FAILED — WordPress site "${args.site_title}" at ${args.domain}`
+                    : `RESULT: SUCCESS — WordPress site "${args.site_title}" created at ${args.domain}`,
+                `WebSocket messages received: ${messages.length}`,
+                `--- Server response ---`,
+                ...messages.map((m, i) => `[${i + 1}] ${m.slice(0, 500)}`),
+                `--- Final message ---`,
+                finalStr,
+                ``,
+                `IMPORTANT: This operation was handled entirely by the Cloudstick API.`,
+                `Do NOT run any SSH commands to verify or investigate this result.`,
+                `Report the result above to the Pilot as-is.`,
+            ].join('\n');
+
+            return { success: !hasError, output: summary };
         } catch (err) {
-            return { success: false, output: `WordPress site creation failed: ${err instanceof Error ? err.message : String(err)}` };
+            return { success: false, output: `WordPress site creation FAILED: ${err instanceof Error ? err.message : String(err)}. Do NOT attempt SSH verification.` };
         }
     },
 };
@@ -325,7 +357,7 @@ export const createCustomPhpSiteTool: Tool = {
     execute: async (args) => {
         try {
             const client = getCloudstickClient();
-            const result = await client.createCustomPhpSite(
+            const { messages, final: lastMsg } = await client.createCustomPhpSite(
                 String(args.server_id), userId(),
                 {
                     email: String(args.email),
@@ -339,9 +371,40 @@ export const createCustomPhpSiteTool: Tool = {
                     mime_sniffing_protection: args.mime_sniffing_protection === true,
                 }
             );
-            return { success: true, output: `Custom PHP site "${args.website_name}" created at ${args.domain_name}.\n${JSON.stringify(result, null, 2)}` };
+
+            if (messages.length === 0) {
+                return {
+                    success: false,
+                    output: `Custom PHP site creation FAILED: WebSocket connected but received 0 messages. `
+                        + `The Cloudstick API may not support this creation via this endpoint. `
+                        + `Server ID: ${args.server_id}. Domain: ${args.domain_name}. `
+                        + `Report this failure to the Pilot. Do NOT attempt SSH-based workarounds or verification.`,
+                };
+            }
+
+            const allText = messages.join('\n');
+            const hasError = /error|fail|denied|not allowed|unauthorized|already exists/i.test(allText)
+                && !/success|completed|created/i.test(allText);
+
+            const finalStr = typeof lastMsg === 'string' ? lastMsg : JSON.stringify(lastMsg, null, 2);
+            const summary = [
+                hasError
+                    ? `RESULT: FAILED — Custom PHP site "${args.website_name}" at ${args.domain_name}`
+                    : `RESULT: SUCCESS — Custom PHP site "${args.website_name}" created at ${args.domain_name}`,
+                `WebSocket messages received: ${messages.length}`,
+                `--- Server response ---`,
+                ...messages.map((m, i) => `[${i + 1}] ${m.slice(0, 500)}`),
+                `--- Final message ---`,
+                finalStr,
+                ``,
+                `IMPORTANT: This operation was handled entirely by the Cloudstick API.`,
+                `Do NOT run any SSH commands to verify or investigate this result.`,
+                `Report the result above to the Pilot as-is.`,
+            ].join('\n');
+
+            return { success: !hasError, output: summary };
         } catch (err) {
-            return { success: false, output: `Custom PHP site creation failed: ${err instanceof Error ? err.message : String(err)}` };
+            return { success: false, output: `Custom PHP site creation FAILED: ${err instanceof Error ? err.message : String(err)}. Do NOT attempt SSH verification.` };
         }
     },
 };

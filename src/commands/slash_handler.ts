@@ -1,4 +1,4 @@
-import { getPool, isDBConfigured } from '../database/db.js';
+import { getPool, isDBConfigured, clearSession } from '../database/db.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { setGlobalLLMOverride, getCurrentLLMConfig } from '../llm/provider.js';
 import { setCloudstickUser } from '../api/cloudstick_context.js';
@@ -37,6 +37,10 @@ export async function handleSlashCommand(
             case '/usage':
                 await handleUsage(replyFn);
                 return true;
+            case '/clear':
+            case '/reset':
+                await handleClear(platform, userId, replyFn);
+                return true;
             case '/approve':
                 if (args[1]) {
                     const approvalId = parseInt(args[1], 10);
@@ -69,6 +73,7 @@ export async function handleSlashCommand(
                     '/sessions — List recent sessions\n' +
                     '/nodes — List managed server nodes\n' +
                     '/usage — Show LLM token usage and cost\n' +
+                    '/clear — Wipe conversation history and start fresh\n' +
                     '/approve <id> — Approve a pending HITL request\n' +
                     '/reject <id> — Reject a pending HITL request\n' +
                     '/setkey <private_key> <public_key> — Store SSH key for this user\n' +
@@ -390,4 +395,19 @@ async function handleUsage(replyFn: ReplyFn) {
         `Total Tokens (In+Out): ${tokens}\n` +
         `Estimated Cost: $${cost}`;
     await replyFn(msg, { parse_mode: 'Markdown' });
+}
+
+async function handleClear(
+    platform: 'slack' | 'telegram',
+    userId: string,
+    replyFn: ReplyFn
+) {
+    const sessionId = `${platform}:${userId}`;
+    try {
+        await clearSession(sessionId);
+        await replyFn('🧹 *History cleared!* You can now start a fresh conversation.', { parse_mode: 'Markdown' });
+    } catch (err) {
+        console.error('[SlashHandler] /clear error:', err);
+        await replyFn(`❌ Failed to clear history: ${err instanceof Error ? err.message : String(err)}`);
+    }
 }

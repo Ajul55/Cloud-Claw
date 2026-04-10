@@ -40,7 +40,6 @@ const BLOCKED_PATTERNS: Array<[RegExp, string]> = [
     [/\binsmod\b|\brmmod\b|\bmodprobe\b.*-r/i, 'Kernel module manipulation is not allowed'],
     [/iptables\s+-F\b/i, 'iptables -F is not allowed'],
     [/nft\s+flush\s+ruleset/i, 'nft flush ruleset is not allowed'],
-    [/\bufw\s+(allow|deny|delete|enable|disable)\b/i, 'ufw state modification is not allowed'],
 
     // Arbitrary injections & redirects to scary places
     [/>\s*\/dev\/[sh]d[a-z]/i, 'Direct writes to block devices are not allowed'],
@@ -78,9 +77,10 @@ const READ_SAFE_BINARIES = new Set([
     'tail', 'cat', 'head', 'grep', 'zcat', 'zgrep', 'less', 'more', 'awk', 'sed', 'sort', 'uniq', 'wc', 'nl',
     'ls', 'find', 'stat', 'file', 'du', 'df', 'tree',
     'free', 'vmstat', 'uptime', 'top', 'ps', 'pgrep', 'lsof', 'last',
-    'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute',
+    'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute', 'nmap', 'nc', 'ncat', 'telnet',
     'whoami', 'id', 'date', 'timedatectl', 'hostname', 'uname',
     'which', 'command', 'type', 'php', // php is read safe if not executing scripts
+    'sleep',
     'echo', 'printf', 'test', 'true', 'false',             // shell builtins — harmless output/logic
     'basename', 'dirname', 'readlink', 'realpath',          // path utilities — read-only
     'env', 'printenv',                                       // environment inspection
@@ -92,26 +92,51 @@ const READ_SAFE_BINARIES = new Set([
 const DUAL_PURPOSE_READ_REGEXES: Array<[RegExp, string]> = [
     [/^(sudo\s+)?systemctl\s+(status|is-active|is-enabled|list-units|list-unit-files)\b.*$/i, 'systemctl safe read'],
     [/^(sudo\s+)?journalctl\b.*$/i, 'journalctl read'],
+    [/^(sudo\s+)?journalctl\s+-u\s+php\d*cs-fpm\b.*$/i, 'journalctl php-fpm pool crash log'],
     [/^(sudo\s+)?nginx(?:-cs)?\s+-(t|T|v|V)\b.*$/i, 'nginx read/test'],
+    [/^(sudo\s+)?\/CloudStick\/Packages\/apache2-cs\/bin\/(httpd|apachectl)\s+-t\b.*/i, 'apache-cs syntax check'],
+    [/^(sudo\s+)?\/CloudStick\/Packages\/php\d+cs\/sbin\/php-fpm\b.*--test.*/i, 'php-fpm syntax check'],
     [/^(sudo\s+)?dpkg\s+(-l|-s|--get-selections)\b.*$/i, 'dpkg read'],
     [/^(sudo\s+)?apt\s+list\b.*$/i, 'apt list'],
     [/^(sudo\s+)?apt-cache\s+(show|search|policy)\b.*$/i, 'apt-cache read'],
     [/^(sudo\s+)?rpm\s+-q\b.*$/i, 'rpm read'],
     [/^(sudo\s+)?mysql\s+.*-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*".*$/i, 'mysql safe read'],
     [/^(sudo\s+)?docker\s+(ps|images)\b.*$/i, 'docker safe read'],
+    [/^(sudo\s+)?docker\s+(inspect|logs|port|stats\s+--no-stream|container\s+ls)\b.*$/i, 'docker safe read'],
+    [/^(sudo\s+)?docker\s+exec\s+[^\s]+\s+(nginx\s+-T|nginx\s+-t|cat\b|head\b|tail\b|grep\b|ls\b|find\b|stat\b|php\s+-v\b|wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)\b).*/i, 'docker exec safe read'],
+    [/^(sudo\s+)?docker\s+compose\s+ps\b.*$/i, 'docker compose safe read'],
     [/^(sudo\s+)?[\w.-]+\s+(--version|-v|-V)\b.*$/i, 'version generic command'],
     [/^(sudo\s+)?openssl\s+(s_client|x509)\b.*$/i, 'openssl safe read'],
     [/^(sudo\s+)?certbot\s+certificates\b.*$/i, 'certbot read'],
+    [/^(sudo\s+)?ufw\s+(status|status\s+verbose|status\s+numbered)\s*$/i, 'ufw status read'],
+    [/^(sudo\s+)?csf\s+-g\s+[\d.:a-fA-F/]+\s*$/i, 'csf -g: check rules for IP'],
+    [/^(sudo\s+)?csf\s+-l\b.*$/i, 'csf -l: list temp blocks'],
     [/^(sudo\s+)?wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)\b.*$/i, 'wp-cli safe read'],
-    [/^(sudo\s+)?crontab\s+-l\b.*$/i, 'crontab read'],
+    [/^(sudo\s+)?crontab\s+(-u\s+[a-z0-9_-]+\s+)?-l\b.*$/i, 'crontab read'],
 ];
 
 // Lane 3: Emergency SSH Write Commands (require approval)
 const LANE3_WHITELIST: Array<[RegExp, string]> = [
+    [/^(sudo\s+)?crontab\s+(-u\s+[a-z0-9_-]+\s+)?-r\b.*$/i, 'crontab deletion'],
     [/^(sudo\s+)?systemctl\s+(restart|reload)\s+[\w@.-]+$/i, 'Emergency service restart/reload'],
+    [/^(sudo\s+)?docker\s+(restart|start|stop)\s+[\w][\w.-]*$/i, 'Docker container state change'],
+    [/^(sudo\s+)?docker\s+compose\s+(restart|start|stop)\b.*$/i, 'Docker Compose service state change'],
     [/^(sudo\s+)?killall\s+-9\s+php/i, 'Emergency force-kill of hung PHP-FPM processes'],
     [/^(sudo\s+)?chmod\s+(\+x|[0-7]{3,4})\s+\S+$/i, 'chmod on a script file to make it executable'],
     [/^(sudo\s+)?mkdir\s+-p\s+\S+/i, 'Creating a directory path'],
+    // UFW fallback rules (for non-Cloudstick hosts)
+    [/^(sudo\s+)?ufw\s+(allow|deny)\s+[\d]+(\/(tcp|udp))?\s*$/i, 'Firewall: open/close port'],
+    [/^(sudo\s+)?ufw\s+(allow|deny)\s+[\w-]+(\/(tcp|udp))?\s*$/i, 'Firewall: open/close named service port'],
+    [/^(sudo\s+)?ufw\s+(allow|deny)\s+from\s+[\d./]+.*$/i, 'Firewall: IP-based rule'],
+    [/^(sudo\s+)?ufw\s+(enable|disable|reload)\s*$/i, 'Firewall enable/disable'],
+    [/^(sudo\s+)?ufw\s+delete\s+\d+\s*$/i, 'Firewall rule deletion by number'],
+    // CSF rules (Cloudstick servers use CSF/LFD, not UFW)
+    [/^(sudo\s+)?csf\s+-a\s+[\d.:a-fA-F/]+(\s+.{0,100})?\s*$/i, 'CSF: whitelist IP'],
+    [/^(sudo\s+)?csf\s+-d\s+[\d.:a-fA-F/]+(\s+.{0,100})?\s*$/i, 'CSF: block IP'],
+    [/^(sudo\s+)?csf\s+-tr\s+[\d.:a-fA-F/]+\s*$/i, 'CSF: remove temp block'],
+    [/^(sudo\s+)?csf\s+-r\s*$/i, 'CSF: reload firewall'],
+    // Certbot certificate operations — require HITL approval
+    [/^(sudo\s+)?certbot\s+(certonly|--nginx|--apache|renew)\b.*$/i, 'Certbot certificate operation'],
 ];
 
 // ─── Core Filter Logic ────────────────────────────────────────────────────────
@@ -144,13 +169,31 @@ export function checkCommand(command: string, isWriteTool: boolean = false): Fil
         return { safe: true };
     }
 
-    // 2. Split chained/piped commands to validate each segment
-    const subCommands = trimmed
-        .split(/\s*(?:&&|\|\||;|\|)\s*/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
+    // 2. Split chained/piped commands to validate each segment (respecting quotes)
+    const subCommands: string[] = [];
+    let current = '';
+    let inSingle = false;
+    let inDouble = false;
+    for (let i = 0; i < trimmed.length; i++) {
+        const char = trimmed[i];
+        const next = trimmed[i + 1] || '';
+        
+        if (char === "'" && !inDouble) inSingle = !inSingle;
+        if (char === '"' && !inSingle) inDouble = !inDouble;
+        
+        if (!inSingle && !inDouble) {
+            if (char === ';') { subCommands.push(current.trim()); current = ''; continue; }
+            if (char === '|' && next === '|') { subCommands.push(current.trim()); current = ''; i++; continue; }
+            if (char === '&' && next === '&') { subCommands.push(current.trim()); current = ''; i++; continue; }
+            if (char === '|' && next !== '|') { subCommands.push(current.trim()); current = ''; continue; }
+        }
+        current += char;
+    }
+    if (current.trim()) subCommands.push(current.trim());
 
-    for (const sub of subCommands) {
+    const validSubCommands = subCommands.filter(s => s.length > 0);
+
+    for (const sub of validSubCommands) {
         let subWhitelisted = false;
 
         // Extract base binary (e.g. 'sudo tail -n 50' -> 'tail')
@@ -205,6 +248,8 @@ export function requiresApproval(command: string): string | null {
 // ─── Audit Guard: write-command detection ──────────────────────────────────────
 const AUDIT_BLOCKED_PATTERNS = [
     /systemctl\s+(disable|enable|mask|unmask|restart|stop|start)/i,
+    /docker\s+(restart|stop|start|rm|run|exec)\b/i,
+    /docker\s+compose\s+(restart|stop|start|up|down|exec)\b/i,
     /sed\s+-i/i,
     /\brm\s+/i,
     /\bmv\s+.*\/etc\//i,
@@ -212,7 +257,8 @@ const AUDIT_BLOCKED_PATTERNS = [
     /crontab\s+-[er]/i,
     /apt(-get)?\s+(install|remove|purge)/i,
     /dpkg\s+(-i|--install|--remove)/i,
-    /ufw\s+(allow|deny|delete|enable|disable)/i,
+    /ufw\s+(allow|deny|delete|enable|disable|reload)/i,
+    /csf\s+(-a|-d|-tr|-r)\b/i,
 ];
 
 export function isWriteCommand(command: string): boolean {

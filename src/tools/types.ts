@@ -52,10 +52,14 @@ export interface IncomingMessage {
      *  These are seeded into executedTools so the hallucination detector
      *  knows they genuinely ran. */
     resumedTools?: string[];
+    /** Set to true when the user clicked "Proceed" on the clarification button card.
+     *  Bypasses the shouldPauseForClarification gate so the loop continues instead of
+     *  showing the card again. */
+    isProceedClarification?: boolean;
 }
 
 /** Callback used by the loop to send text back to the user */
-export type ReplyFn = (text: string, options?: unknown) => Promise<void>;
+export type ReplyFn = (text: string, options?: { blocks?: any[]; metadata?: any; [key: string]: any }) => Promise<void>;
 
 /** Callback used by the loop to request HITL approval */
 export type ApprovalFn = (context: {

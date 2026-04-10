@@ -73,19 +73,18 @@ export async function checkSystemUserExists(
 }
 
 /**
- * Check if a database user already exists before creating one.
+ * Check if a database user already exists before creating one (V2 server-level).
  */
 export async function checkDatabaseUserExists(
-    websiteId: string,
     serverId: string,
     userId: string,
     username: string,
 ): Promise<ListBeforeActResult> {
     try {
         const client = getCloudstickClient();
-        const dbUsers: any = await client.listDatabaseUsers(websiteId, serverId, userId);
+        const dbUsers: any = await client.listServerDatabaseUsers(serverId, userId);
         const existing = (dbUsers?.data ?? dbUsers ?? []).find(
-            (u: any) => u.username?.toLowerCase() === username.toLowerCase()
+            (u: any) => (u.username ?? u.db_user_name)?.toLowerCase() === username.toLowerCase()
         );
         if (existing) {
             return { alreadyExists: true, existing };

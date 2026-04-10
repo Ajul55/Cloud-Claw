@@ -341,3 +341,31 @@ export async function getLatestPendingApproval(sessionId: string): Promise<Appro
     );
     return rows[0] ?? null;
 }
+
+export async function clearSession(id: string): Promise<void> {
+    if (!isDBConfigured()) {
+        const existing = memoryStore.get(id);
+        if (existing) {
+            existing.messages = [];
+            existing.receipts = {};
+            existing.iteration = 0;
+            existing.updated_at = new Date();
+        }
+        for (const [appId, app] of memoryApprovals.entries()) {
+            if (app.session_id === id && app.status === 'pending') {
+                app.status = 'expired';
+                app.resolved_at = new Date();
+            }
+        }
+        return;
+    }
+    const pool = getPool();
+    await pool.query(
+        `UPDATE sessions SET messages = '[]'::JSONB, receipts = '{}'::JSONB, iteration = 0, updated_at = NOW() WHERE id = $1`,
+        [id]
+    );
+    await pool.query(
+        `UPDATE approval_queue SET status = 'expired', resolved_at = NOW() WHERE session_id = $1 AND status = 'pending'`,
+        [id]
+    );
+}

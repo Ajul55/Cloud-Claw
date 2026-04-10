@@ -40,9 +40,11 @@ This means:
 | Layer | Technology |
 |---|---|
 | Runtime | Node.js / TypeScript |
+| API | Cloudstick V2 (Server-Level Resource Architecture) |
 | LLM | Claude Sonnet (primary), MiniMax M2.5 (fallback) |
 | LLM Client | OpenAI-compatible SDK (`getLLMClient()`) |
 | Messaging | Telegram (long-poll) + Slack (Socket Mode) |
+| Firewall | CSF (ConfigServer Security & Firewall) — Native support |
 | SSH | ssh2 library — hub-agent restricted user |
 | Database | PostgreSQL + pgvector |
 | Scheduler | node-cron |
@@ -144,7 +146,7 @@ Every LLM call uses three conceptual layers baked into SYSTEM_PROMPT:
 |---|---|---|---|
 | Tier 1 | Read-only diagnostics | `systemctl status nginx` | Execute immediately |
 | Tier 2 | Safe writes | `systemctl restart nginx` | Execute immediately |
-| Tier 3 | Dangerous writes | `rm`, `chmod 777`, package installs | HITL approval required |
+| Tier 3 | Infrastructure changes | `csf -a 1.2.3.4`, `rm` | HITL approval required |
 
 The `command_filter.ts` file classifies every command before execution.
 Blocklisted commands (e.g. `rm -rf /`) are rejected outright.
@@ -206,31 +208,19 @@ fix_memory (
 
 ## 5-Level Build Roadmap
 
-### Level 1 — Foundation (IN PROGRESS)
+### Level 1 — Foundation (COMPLETE)
 - ✅ Hub VPS, PostgreSQL, Telegram + Slack bots
 - ✅ ssh2 SSH bridge, execute_ssh_command, diagnose_nginx
 - ✅ 3-Layer Prompting Stack
 - ✅ Tool registry + command_filter
-- ✅ Basic HITL approval creation + session pause
-- ❌ HITL resume path (src/hitl/resume.ts) — needs completion
-- ❌ Slack approval card rendering — needs fix
-- ❌ Slash commands (/approve, /reject, /status, /nodes, /usage)
+- ✅ HITL approval lifecycle + Slack card rendering
+- ✅ V2 Server-Level API Migration (Cron, Databases)
 
-### Level 2 — Memory (NOT STARTED)
-- pgvector fix_memory table
-- storeFix() after every successful resolution
-- retrieveSimilarFixes() injected into Layer 2 prompt
-- Semantic deduplication (same CMS + PHP version filter)
-
-### Level 3 — Voice (NOT STARTED)
-- Groq/Whisper for Pilot voice commands
-- ElevenLabs for morning briefing audio
-- Claude Vision for screenshot error extraction
-
-### Level 4 — Power Skills (NOT STARTED)
-- 11 Business-Logic Skills (WordPress repair, SSL, PHP switcher, etc.)
-- 8 Sentinel signal monitors
-- Full Causality Map per client node
+### Level 4 — Power Skills (ACTIVE)
+- 🚀 CSF Firewall Native Support (IP blocks, whitelists, ports)
+- 🚀 Forensic 502 Diagnostics (PHP pool auditing, socket verification)
+- 🚀 Cloudstick Internal Log Reading (/var/log/cloudstick)
+- 🚀 V2 Cloudflare DNS Migration (In Progress)
 
 ### Level 5 — Heartbeat (NOT STARTED)
 - node-cron scheduler (morning briefings, fleet sweeps)

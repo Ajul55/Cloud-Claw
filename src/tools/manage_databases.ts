@@ -1,8 +1,8 @@
 /**
- * Database Management Tools — Phase 3 (Lane 1: Cloudstick API)
+ * Database Management Tools — V2 Server-Level API
  *
- * Create and delete databases via the Cloudstick API.
- * Both operations are approvalTier: 3 (HITL).
+ * Refactored to use V2 createDatabaseWithUser (creates DB + user atomically).
+ * deleteDatabase is not available in V2 — users must use the Cloudstick dashboard.
  */
 
 import type { Tool } from './types.js';
@@ -15,11 +15,14 @@ const userId = () => getCloudstickUser()?.cloudstick_user_id
     ?? env.CLOUDSTICK_USER_ID
     ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set in environment'); })();
 
-// ─── Create Database (Tier 3) ────────────────────────────────────────────────
+// ─── Create Database + User (V2) ─────────────────────────────────────────────
 
 export const createDatabaseTool: Tool = {
     name: 'create_database',
-    description: 'Create a new database for a website via the Cloudstick API. Requires HITL approval.',
+    description:
+        'Create a new database and its initial user via the Cloudstick V2 API. ' +
+        'The V2 API creates a database and user atomically (createDatabaseWithUser). ' +
+        'Requires HITL approval.',
     parameters: {
         type: 'object',
         properties: {
@@ -27,91 +30,91 @@ export const createDatabaseTool: Tool = {
             server_id: { type: 'string', description: 'Cloudstick server ID' },
             server_label: { type: 'string', description: 'Human-readable server label' },
             name: { type: 'string', description: 'Database name to create' },
+            db_collation: { type: 'string', description: 'Database collation (optional, e.g. "utf8mb4_unicode_ci")' },
+            db_user_name: { type: 'string', description: 'Username for the initial database user' },
+            password: { type: 'string', description: 'Password for the initial database user' },
+            privileges: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Privileges to grant (default: ["ALL"])',
+            },
         },
-        required: ['website_id', 'server_id', 'name'],
+        required: ['website_id', 'server_id', 'name', 'db_user_name', 'password'],
     },
     approvalTier: 3,
     getRationale: (args) =>
-        `This will create a new database "${args.name}" for website ${args.website_id} on server ${args.server_label ?? args.server_id}.`,
+        `This will create database "${args.name}" with user "${args.db_user_name}" for website ${args.website_id} on server ${args.server_label ?? args.server_id}.`,
     getApprovalRequest: (args) => ({
         command: encodeToolApprovalCommand('create_database', {
             website_id: String(args.website_id),
             server_id: String(args.server_id),
             server_label: String(args.server_label ?? ''),
             name: String(args.name),
+            db_user_name: String(args.db_user_name),
         }),
         targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Create database "${args.name}".`,
+        rationale: `Create database "${args.name}" with user "${args.db_user_name}".`,
     }),
     getCurrentState: async (args) => {
         try {
             const client = getCloudstickClient();
-            const dbs = await client.listDatabases(String(args.website_id), String(args.server_id), userId());
-            return JSON.stringify(dbs);
+            const users = await client.listServerDatabaseUsers(String(args.server_id), userId());
+            return JSON.stringify(users);
         } catch { return '[]'; }
     },
     execute: async (args) => {
         const websiteId = String(args.website_id);
         const serverId = String(args.server_id);
         const dbName = String(args.name);
-
-        // List-before-act: check if DB already exists
-        try {
-            const client = getCloudstickClient();
-            const existing: any = await client.listDatabases(websiteId, serverId, userId());
-            const found = (existing?.data ?? existing ?? []).find(
-                (db: any) => db.name?.toLowerCase() === dbName.toLowerCase()
-            );
-            if (found) {
-                return { success: true, output: `Database "${dbName}" already exists. No action taken.\n${JSON.stringify(found, null, 2)}` };
-            }
-        } catch { /* proceed anyway */ }
+        const dbUserName = String(args.db_user_name);
+        const password = String(args.password);
+        const privileges = (args.privileges as string[] | undefined) ?? ['ALL'];
 
         try {
             const client = getCloudstickClient();
-            const result = await client.createDatabase(websiteId, serverId, userId(), { name: dbName });
-            return { success: true, output: `Database "${dbName}" created.\n${JSON.stringify(result, null, 2)}` };
+            const result = await client.createDatabaseWithUser(websiteId, serverId, userId(), {
+                database: {
+                    db_name: dbName,
+                    ...(args.db_collation ? { db_collation: String(args.db_collation) } : {}),
+                },
+                db_user: {
+                    db_user_name: dbUserName,
+                    password,
+                    privileges,
+                },
+            });
+            return { success: true, output: `Database "${dbName}" created with user "${dbUserName}".\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to create database: ${err instanceof Error ? err.message : String(err)}` };
         }
     },
 };
 
-// ─── Delete Database (Tier 3) ────────────────────────────────────────────────
+// ─── Delete Database — Not Available in V2 ───────────────────────────────────
 
 export const deleteDatabaseTool: Tool = {
     name: 'delete_database',
-    description: 'Delete a database via the Cloudstick API. This is DESTRUCTIVE and permanent. Requires HITL approval.',
+    description:
+        'Attempt to delete a database. NOTE: The Cloudstick V2 API does not have a dedicated database deletion endpoint. ' +
+        'Direct users to the Cloudstick dashboard for this operation.',
     parameters: {
         type: 'object',
         properties: {
-            db_id: { type: 'string', description: 'The Cloudstick database ID to delete' },
-            website_id: { type: 'string', description: 'Cloudstick website ID' },
+            db_id: { type: 'string', description: 'The Cloudstick database ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
             server_label: { type: 'string', description: 'Human-readable server label' },
             name: { type: 'string', description: 'Database name (for display)' },
         },
-        required: ['db_id', 'website_id', 'server_id'],
+        required: ['db_id', 'server_id'],
     },
-    approvalTier: 3,
-    getRationale: (args) =>
-        `This will PERMANENTLY DELETE database "${args.name ?? args.db_id}" from server ${args.server_label ?? args.server_id}. All data will be lost.`,
-    getCurrentState: async (args) => {
-        try {
-            const client = getCloudstickClient();
-            const dbs = await client.listDatabases(String(args.website_id), String(args.server_id), userId());
-            return JSON.stringify(dbs);
-        } catch { return '[]'; }
-    },
-    execute: async (args) => {
-        try {
-            const client = getCloudstickClient();
-            const result = await client.deleteDatabase(
-                String(args.db_id), String(args.website_id), String(args.server_id), userId()
-            );
-            return { success: true, output: `Database deleted.\n${JSON.stringify(result, null, 2)}` };
-        } catch (err) {
-            return { success: false, output: `Failed to delete database: ${err instanceof Error ? err.message : String(err)}` };
-        }
+    approvalTier: 1,
+    execute: async (_args) => {
+        return {
+            success: false,
+            output:
+                'Deleting databases via the Cloudstick V2 API is not supported. ' +
+                'Please use the Cloudstick dashboard to delete the database: ' +
+                'Dashboard → Server → Databases → select the database → Delete.',
+        };
     },
 };

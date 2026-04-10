@@ -59,10 +59,15 @@ export function createSlackApp(): SlackAppInstance {
         const isContinueRequest = /^(?:@cloudclaw\s+)?(?:continue|keep going)\b/.test(lowerText);
         console.log(`[Slack] Message from ${user} in ${channel}: ${cleanText.slice(0, 80)}`);
 
-        const onReply: ReplyFn = async (response) => {
-            const chunks = splitMessage(response, 3000);
-            for (const chunk of chunks) {
-                await say(chunk);
+        const onReply: ReplyFn = async (response, options) => {
+            if (options?.blocks) {
+                // Block Kit message — don't chunk; send as a single rich message
+                await say({ text: response, blocks: options.blocks });
+            } else {
+                const chunks = splitMessage(response, 3000);
+                for (const chunk of chunks) {
+                    await say(chunk);
+                }
             }
         };
 
@@ -174,13 +179,21 @@ export function createSlackApp(): SlackAppInstance {
 
         if (!channelId) return;
 
-        // Optionally, update the message to remove buttons here
         if ((body as any).message?.ts) {
+            const originalBlocks = (body as any).message?.blocks || [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const preservedBlocks = originalBlocks.filter((b: any) => b.type !== 'actions' && b.type !== 'input');
+            preservedBlocks[0].text.text = '✅ Action Approved';
+            preservedBlocks.push({
+                type: 'context',
+                elements: [{ type: 'mrkdwn', text: `✅ *Approved* by <@${userId}>` }]
+            });
+
             await client.chat.update({
                 channel: channelId,
                 ts: (body as any).message.ts,
-                text: 'Processing approval...',
-                blocks: []
+                text: 'Action Approved',
+                blocks: preservedBlocks
             }).catch(() => { });
         }
 
@@ -209,11 +222,20 @@ export function createSlackApp(): SlackAppInstance {
         if (!channelId) return;
 
         if ((body as any).message?.ts) {
+            const originalBlocks = (body as any).message?.blocks || [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const preservedBlocks = originalBlocks.filter((b: any) => b.type !== 'actions' && b.type !== 'input');
+            preservedBlocks[0].text.text = '❌ Action Rejected';
+            preservedBlocks.push({
+                type: 'context',
+                elements: [{ type: 'mrkdwn', text: `❌ *Rejected* by <@${userId}>${reason ? `\n*Reason:* ${reason}` : ''}` }]
+            });
+
             await client.chat.update({
                 channel: channelId,
                 ts: (body as any).message.ts,
-                text: 'Processing rejection...',
-                blocks: []
+                text: 'Action Rejected',
+                blocks: preservedBlocks
             }).catch(() => { });
         }
 
@@ -224,6 +246,144 @@ export function createSlackApp(): SlackAppInstance {
             async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
             async () => { },
             reason,
+        );
+    });
+
+    // ─── Interactive: Server Selection ────────────────────────────────────────
+    // Each button has action_id `select_server__<label>` — regex catches all variants.
+    // Note: app.action() handlers do not receive `say` in Bolt — use client.chat.postMessage.
+    app.action(/^select_server__/, async ({ body, ack, client }) => {
+        await ack();
+
+        const action = (body as any).actions[0];
+        const serverLabel: string = action.value;
+        const channelId = (body as any).channel?.id;
+        const userId = (body as any).user?.id ?? 'unknown';
+        const ts = (body as any).message?.ts;
+
+        if (!channelId) return;
+
+        // Replace buttons with a receipt — no zombie buttons
+        if (ts) {
+            await client.chat.update({
+                channel: channelId,
+                ts,
+                text: `Selected: ${serverLabel}`,
+                blocks: [
+                    {
+                        type: 'context',
+                        elements: [{
+                            type: 'mrkdwn',
+                            text: `🖥️ Selected: *${serverLabel}* by <@${userId}>`,
+                        }],
+                    },
+                ],
+            }).catch(err => console.warn('[slack] select_server chat.update failed:', err));
+        }
+
+        // Build a say-compatible wrapper for handleMessage
+        const postSay = async (msgOrText: any) => {
+            if (typeof msgOrText === 'string') {
+                await client.chat.postMessage({ channel: channelId, text: msgOrText });
+            } else {
+                await client.chat.postMessage({ channel: channelId, ...msgOrText });
+            }
+        };
+
+        // Re-enter the loop with the server label as the message text.
+        await handleMessage(serverLabel, userId, channelId, postSay, client);
+    });
+
+    // ─── Interactive: Clarification — Cancel ──────────────────────────────────
+    app.action('clarification_cancel', async ({ body, ack, client }) => {
+        await ack();
+
+        const channelId = (body as any).channel?.id;
+        const userId = (body as any).user?.id ?? 'unknown';
+        const ts = (body as any).message?.ts;
+
+        if (!channelId) return;
+
+        if (ts) {
+            await client.chat.update({
+                channel: channelId,
+                ts,
+                text: 'Cancelled',
+                blocks: [
+                    {
+                        type: 'context',
+                        elements: [{
+                            type: 'mrkdwn',
+                            text: `❌ *Cancelled* by <@${userId}>`,
+                        }],
+                    },
+                ],
+            }).catch(err => console.warn('[slack] clarification_cancel chat.update failed:', err));
+        }
+    });
+
+    // ─── Interactive: Clarification — Proceed ─────────────────────────────────
+    app.action('clarification_proceed', async ({ body, ack, client }) => {
+        await ack();
+
+        const channelId = (body as any).channel?.id;
+        const userId = (body as any).user?.id ?? 'unknown';
+        const ts = (body as any).message?.ts;
+
+        if (!channelId) return;
+
+        // Update UI to receipt
+        if (ts) {
+            await client.chat.update({
+                channel: channelId,
+                ts,
+                text: 'Proceeding...',
+                blocks: [
+                    {
+                        type: 'context',
+                        elements: [{
+                            type: 'mrkdwn',
+                            text: `✅ *Proceeding...* confirmed by <@${userId}>`,
+                        }],
+                    },
+                ],
+            }).catch(err => console.warn('[slack] clarification_proceed chat.update failed:', err));
+        }
+
+        const sessionId = `slack:${userId}`;
+
+        const onReply: ReplyFn = async (response, options) => {
+            if (options?.blocks) {
+                await client.chat.postMessage({ channel: channelId, text: response, blocks: options.blocks });
+            } else {
+                const chunks = splitMessage(response, 3000);
+                for (const chunk of chunks) {
+                    await client.chat.postMessage({ channel: channelId, text: chunk });
+                }
+            }
+        };
+
+        const onApproval: ApprovalFn = async (context) => {
+            const { slackBlocks } = buildApprovalMessage(context);
+            await client.chat.postMessage({
+                channel: channelId,
+                text: 'Action requires confirmation (Proceed/Reject)',
+                blocks: slackBlocks,
+            });
+        };
+
+        // isProceedClarification: true bypasses the shouldPauseForClarification gate in loop.ts
+        await runAgentLoop(
+            {
+                sessionId,
+                channel: 'slack',
+                userId,
+                text: 'Proceed',
+                replyTarget: channelId,
+                isProceedClarification: true,
+            },
+            onReply,
+            onApproval,
         );
     });
 

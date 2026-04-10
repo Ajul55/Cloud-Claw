@@ -58,9 +58,9 @@ export const changeWebsitePhpVersion = {
     getCurrentState: async (args: Record<string, unknown>) => {
         try {
             const context = await resolveWebsiteContext(stringify(args.website));
-            return JSON.stringify(
-                await getCloudstickClient().getPhpVersion(context.websiteId, context.serverId, getEffectiveCloudstickUserId())
-            );
+            // PHP version is in the raw website record from listWebsitesByServer
+            const phpVersion = context.raw?.php_version ?? context.raw?.phpVersion ?? null;
+            return JSON.stringify({ php_version: phpVersion });
         } catch {
             return '{}';
         }
