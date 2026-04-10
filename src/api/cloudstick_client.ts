@@ -1,5 +1,4 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
-import WebSocket from 'ws';
 import { env } from '../config/env.js';
 import { getCloudstickUser } from './cloudstick_context.js';
 
@@ -13,7 +12,6 @@ export class CloudstickApiClient {
     private client: AxiosInstance;
     private apiKey: string;
     private apiSecret: string;
-    private baseURL: string;
 
     /**
      * @param options.apiKey     - Cloudstick API key (falls back to env)
@@ -22,7 +20,6 @@ export class CloudstickApiClient {
      */
     constructor(options: CloudstickClientOptions = {}) {
         const baseURL = options.baseURL ?? env.CLOUDSTICK_API_BASE ?? 'https://api.cloudstick.io';
-        this.baseURL = baseURL;
         this.apiKey = options.apiKey ?? env.CLOUDSTICK_API_KEY ?? '';
         this.apiSecret = options.apiSecret ?? env.CLOUDSTICK_API_SECRET ?? '';
 
@@ -70,93 +67,6 @@ export class CloudstickApiClient {
         }
     }
 
-    /**
-     * WebSocket request for long-running operations (site creation, deletion).
-     * Cloudstick uses WebSocket for operations that stream progress updates.
-     *
-     * Opens a WS connection, sends the JSON payload, collects all messages,
-     * and resolves with the final success/error message.
-     *
-     * @param path   - API path, e.g. `/wordpress/servers/197/users/48`
-     * @param data   - JSON payload to send after connection opens
-     * @param opts   - Optional: timeoutMs (default 120s)
-     */
-    public async wsRequest<T = any>(
-        path: string,
-        data: Record<string, unknown>,
-        opts?: { timeoutMs?: number },
-    ): Promise<{ messages: string[]; final: T }> {
-        const ctx = getCloudstickUser();
-        const effectiveKey = ctx?.cloudstick_api_key ?? this.apiKey;
-        const effectiveSecret = ctx?.cloudstick_api_secret ?? this.apiSecret;
-
-        if (!effectiveKey || !effectiveSecret) {
-            throw new Error('Cloudstick API_KEY and API_SECRET are required (set in .env or per-user via /setup)');
-        }
-
-        // Use explicit WS base URL if set, otherwise derive from REST base
-        const explicitWsBase = env.CLOUDSTICK_WS_BASE;
-        const wsBase = explicitWsBase
-            ? explicitWsBase.replace(/\/$/, '')
-            : this.baseURL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
-        const wsUrl = `${wsBase}/api/v2${path}`;
-        const timeoutMs = opts?.timeoutMs ?? 120_000;
-
-        console.log(`[Cloudstick WS] Connecting: ${wsUrl}`);
-
-        return new Promise<{ messages: string[]; final: T }>((resolve, reject) => {
-            const ws = new WebSocket(wsUrl, {
-                headers: {
-                    'APIKey': effectiveKey,
-                    'APISecret': effectiveSecret,
-                },
-            });
-
-            const collected: string[] = [];
-            let lastParsed: any = null;
-            let settled = false;
-
-            const timer = setTimeout(() => {
-                if (!settled) {
-                    settled = true;
-                    ws.close();
-                    reject(new Error(`WebSocket timed out after ${timeoutMs / 1000}s. Progress received: ${collected.length} messages.`));
-                }
-            }, timeoutMs);
-
-            ws.on('open', () => {
-                console.log(`[Cloudstick WS] Connected, sending payload...`);
-                ws.send(JSON.stringify(data));
-            });
-
-            ws.on('message', (raw: WebSocket.RawData) => {
-                const text = raw.toString();
-                collected.push(text);
-                console.log(`[Cloudstick WS] ← ${text.slice(0, 200)}`);
-
-                try { lastParsed = JSON.parse(text); } catch { lastParsed = text; }
-            });
-
-            ws.on('close', (code: number) => {
-                clearTimeout(timer);
-                if (!settled) {
-                    settled = true;
-                    console.log(`[Cloudstick WS] Closed (code ${code}), ${collected.length} messages received.`);
-                    resolve({ messages: collected, final: lastParsed as T });
-                }
-            });
-
-            ws.on('error', (err: Error) => {
-                clearTimeout(timer);
-                if (!settled) {
-                    settled = true;
-                    console.error(`[Cloudstick WS] Error:`, err.message);
-                    reject(new Error(`WebSocket error: ${err.message}`));
-                }
-            });
-        });
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // 1. Server Discovery & Actions
     // ═══════════════════════════════════════════════════════════════════════════
@@ -197,7 +107,7 @@ export class CloudstickApiClient {
 
     /** Reboot a server */
     public async rebootServer(serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/reboot/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/reboot/servers/${serverId}/users/${userId}` });
     }
 
     /** Change PHP version at website level */
@@ -588,6 +498,60 @@ export class CloudstickApiClient {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Legacy stubs — no v2 docs provided yet.
+    // TODO: Replace once backend team confirms v2 paths.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // > Database Users (legacy)
+    public async listDatabaseUsers(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/appdbusers/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async createDatabaseUser(websiteId: string, serverId: string, userId: string, data: { username: string; password: string }) {
+        return this.request({ method: 'POST', url: `/appdbusers/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+    public async deleteDatabaseUser(dbUserId: string, websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/appdbusers/${dbUserId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async updateDatabaseUser(dbUserId: string, websiteId: string, serverId: string, userId: string, data: { password?: string }) {
+        return this.request({ method: 'PATCH', url: `/appdbusers/${dbUserId}/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // > Databases (legacy)
+    public async listDatabases(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async createDatabase(websiteId: string, serverId: string, userId: string, data: { name: string }) {
+        return this.request({ method: 'POST', url: `/appdatabase/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+    public async deleteDatabase(dbId: string, websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/appdatabase/${dbId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // > Cron Jobs (legacy)
+    public async listCronJobs(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async createCronJob(websiteId: string, serverId: string, userId: string, data: { command: string; schedule: string }) {
+        return this.request({ method: 'POST', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+    public async deleteCronJob(cronId: string, websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/cronjobs/${cronId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // > SSL Status (legacy — no v2 equivalent provided)
+    public async getSSLStatus(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/ssl/status/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // > PHP (legacy — getPhpVersion and switchPhpVersion kept for downstream tools)
+    public async getPhpVersion(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/php/version/${websiteId}/servers/${serverId}/users/${userId}` });
+    }
+    public async switchPhpVersion(websiteId: string, serverId: string, userId: string, data: { php_version: string }) {
+        return this.request({ method: 'POST', url: `/php/switch/${websiteId}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // 9. WordPress Management
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -859,10 +823,10 @@ export class CloudstickApiClient {
         websiteId: string,
         serverId: string,
         userId: string,
-        data: { backup_period: string; retention_period?: string; is_full_backup?: boolean; success_backup_email?: boolean; failed_backup_email?: boolean }
+        data: { backup_period: string; is_full_backup?: boolean; success_backup_email?: boolean; failed_backup_email?: boolean }
     ) {
         return this.request({
-            method: 'POST',
+            method: 'PATCH',
             url: `/backup/websites/${websiteId}/servers/${serverId}/users/${userId}`,
             data,
         });
@@ -871,8 +835,9 @@ export class CloudstickApiClient {
     /** Disable website backup */
     public async disableWebsiteBackup(websiteId: string, serverId: string, userId: string) {
         return this.request({
-            method: 'DELETE',
+            method: 'PATCH',
             url: `/backup/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            data: { backup_period: '', is_full_backup: false },
         });
     }
 
@@ -881,10 +846,10 @@ export class CloudstickApiClient {
         databaseId: string,
         serverId: string,
         userId: string,
-        data: { backup_period: string; retention_period?: string; success_backup_email?: boolean; failed_backup_email?: boolean }
+        data: { backup_period: string; success_backup_email?: boolean; failed_backup_email?: boolean }
     ) {
         return this.request({
-            method: 'POST',
+            method: 'PATCH',
             url: `/backup/databases/${databaseId}/servers/${serverId}/users/${userId}`,
             data,
         });
@@ -893,8 +858,9 @@ export class CloudstickApiClient {
     /** Disable database backup */
     public async disableDatabaseBackup(databaseId: string, serverId: string, userId: string) {
         return this.request({
-            method: 'DELETE',
+            method: 'PATCH',
             url: `/backup/databases/${databaseId}/servers/${serverId}/users/${userId}`,
+            data: { backup_period: '' },
         });
     }
 
@@ -982,7 +948,7 @@ export class CloudstickApiClient {
 
     /** List Cloudflare zones */
     public async listCloudflareZones(userId: string, params?: { account_label?: string; page?: number; limit?: number; search?: string }) {
-        return this.request({ method: 'GET', url: `/cloudflare/zones/users/${userId}`, params });
+        return this.request({ method: 'GET', url: `/listzones/users/${userId}`, params });
     }
 
     /** List Cloudflare accounts for user */
@@ -1000,26 +966,9 @@ export class CloudstickApiClient {
         return this.request({ method: 'POST', url: `/dnsrecords/users/${userId}`, data });
     }
 
-    /** Create Cloudflare zone (add domain to Cloudflare) */
-    public async createCloudflareZone(
-        userId: string,
-        data: { account_label: string; name: string; type?: 'full' | 'partial'; jump_start?: boolean }
-    ) {
+    /** Create Cloudflare zone */
+    public async createCloudflareZone(userId: string, data: { account_label: string; domain: string }) {
         return this.request({ method: 'POST', url: `/createzone/users/${userId}`, data });
-    }
-
-    /** Delete a Cloudflare zone by zone ID */
-    public async deleteCloudflareZone(userId: string, zoneId: string, data: { account_label: string }) {
-        return this.request({ method: 'POST', url: `/deletezone/${zoneId}/users/${userId}`, data });
-    }
-
-    /** Add / update a domain on Cloudflare and link it to a server */
-    public async addZoneToServer(
-        serverId: string,
-        userId: string,
-        params: { account_label: string; domain: string }
-    ) {
-        return this.request({ method: 'POST', url: `/addzone/servers/${serverId}/users/${userId}`, params, data: {} });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1278,38 +1227,32 @@ export class CloudstickApiClient {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 21. WordPress Site Creation (WebSocket)
+    // 21. WordPress Site Creation — TODO: confirm REST vs WebSocket
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Create a WordPress site via WebSocket (Cloudstick uses WS for site creation) */
+    /** Create a WordPress site (Insomnia shows WebSocket; trying REST POST fallback) */
+    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/wordpress/servers/{s}/users/{u}
     public async createWordPressSite(serverId: string, userId: string, data: {
         email: string; website_name: string; domain: string; site_title: string;
         admin_username: string; admin_password: string; admin_email: string;
         php_version: string; web_app_server: string; account_label?: string;
     }) {
-        return this.wsRequest(
-            `/wordpress/servers/${serverId}/users/${userId}`,
-            data as unknown as Record<string, unknown>,
-            { timeoutMs: 180_000 },
-        );
+        return this.request({ method: 'POST', url: `/wordpress/servers/${serverId}/users/${userId}`, data });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 22. Custom PHP Site Creation (WebSocket)
+    // 22. Custom PHP Site Creation — TODO: confirm REST vs WebSocket
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Create a custom PHP site via WebSocket (Cloudstick uses WS for site creation) */
+    /** Create a custom PHP site (Insomnia shows WebSocket; trying REST POST fallback) */
+    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/customphp/servers/{s}/users/{u}
     public async createCustomPhpSite(serverId: string, userId: string, data: {
         email: string; website_name: string; domain_type: string; domain_name: string;
         php_version: string; web_app_server: string;
         clickjacking_protection?: boolean; xss_protection?: boolean; mime_sniffing_protection?: boolean;
         account_label?: string;
     }) {
-        return this.wsRequest(
-            `/customphp/servers/${serverId}/users/${userId}`,
-            data as unknown as Record<string, unknown>,
-            { timeoutMs: 180_000 },
-        );
+        return this.request({ method: 'POST', url: `/customphp/servers/${serverId}/users/${userId}`, data });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
