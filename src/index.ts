@@ -10,11 +10,12 @@
 
 import cron from 'node-cron';
 import { env } from './config/env.js';
-import { connectDB } from './database/db.js';
+import { connectDB, cleanupOldFixes } from './database/db.js';
 import { createSlackApp, startSlackApp } from './interfaces/slack.js';
 import { expireStaleApprovals } from './jobs/expire_approvals.js';
 import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
+import { startHealthServer } from './health.js';
 
 async function main(): Promise<void> {
     console.log('');
@@ -30,6 +31,9 @@ async function main(): Promise<void> {
     } else {
         console.log('[DB] No DATABASE_URL configured — running without persistence');
     }
+
+    // 1b. Health check endpoint (for PM2 / load balancer monitoring)
+    startHealthServer(9000);
 
     // 2. Telegram (optional)
     let telegramBot: Awaited<ReturnType<typeof import('./interfaces/telegram.js').createTelegramBot>> | null = null;
@@ -62,6 +66,10 @@ async function main(): Promise<void> {
     });
     cron.schedule('*/10 * * * *', () => {
         void timeoutStaleSessions();
+    });
+    // W7: Daily fix_memory TTL cleanup at 3 AM
+    cron.schedule('0 3 * * *', () => {
+        void cleanupOldFixes(90);
     });
 
     // 4. Sentinel Heartbeat

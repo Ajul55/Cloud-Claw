@@ -49,6 +49,8 @@ const EnvSchema = z.object({
 
     // SSH (optional — tools that need it will fail gracefully)
     SSH_PRIVATE_KEY_PATH: z.string().optional(),
+    SSH_PUBLIC_KEY_PATH: z.string().optional(),
+    SSH_CA_KEY_PATH: z.string().optional(),    // W1: SSH Certificate Authority private key
     SSH_USER: z.string().default('cloud-agent'),
     SSH_HOST: z.string().optional(),
     SSH_PORT: z.coerce.number().int().positive().default(22),

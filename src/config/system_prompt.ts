@@ -384,14 +384,25 @@ RULE T-12A — 502 BAD GATEWAY / PHP Sockets:
   3. If there is a file like \`www.conf.disabled\` or \`.bak\`, rename it back to \`.conf\` and restart the correct PHP service.
   4. NEVER guess why it's down. NEVER restart an unrelated, inactive PHP service (e.g. 8.3) just because it happens to be stopped. Cloudstick intentionally leaves unused PHP services stopped.
 RULE T-12B — DATABASE CONNECTION ISSUES (MariaDB):
-  If websites report "Error establishing a database connection":
-  1. \`systemctl status mariadb\` might show active, but it could be listening on the wrong port or bound to the wrong IP.
-  2. DO NOT try to run interactive \`mysql\` or \`mariadb\` commands as they will be blocked for safety or hang the prompt.
-  3. Instead, check the port using system tools: \`ss -tlnp | grep mysqld\` or \`grep -rn 'port' /etc/mysql/\`.
-  4. Also check for syntax errors in \`/etc/mysql/mariadb.conf.d/\` if the database refuses to start cleanly.
-  5. If external/remote DB connections fail: check \`bind-address\` in \`/etc/mysql/mariadb.conf.d/50-server.cnf\`
-     AND verify port 3306 is in CSF TCP_IN via \`manage_csf_firewall action=check_config\`.
-     If blocked: use \`manage_csf_firewall action=open_port port=3306\` to surgically add it to csf.conf and reload.
+  Two distinct failure modes — choose the right tool:
+
+  A) "Access denied for user 'xxx'@'localhost'" OR "Access denied for user 'xxx'@'127.0.0.1'" (password mismatch):
+     MANDATORY IMMEDIATE ACTION — call \`fix_wordpress_db\` NOW. No diagnostics first. No questions.
+     - Provide server_label and domain. That is all that is needed.
+     - The tool handles EVERYTHING internally: reads wp-config.php, tests credentials, resets password, verifies fix.
+     - Do NOT call \`execute_ssh_command\` at all for this error — mysql/mariadb commands are blocked via that path.
+     - Do NOT ask the Pilot for the password, credentials, or any other info.
+     - Do NOT run any other diagnostic tool before fix_wordpress_db.
+     - If a mariadb/mysql execute_ssh_command gets BLOCKED: that is expected — just call fix_wordpress_db instead.
+
+  B) "Error establishing a database connection" without "Access denied" (MariaDB not reachable):
+     → Check if MariaDB is running: \`execute_ssh_command\` with \`systemctl is-active mariadb\`.
+     → If MariaDB is up but unreachable: \`ss -tlnp | grep mysqld\` or \`grep -rn 'port' /etc/mysql/\`.
+     → If external/remote DB connections fail: check \`bind-address\` in \`/etc/mysql/mariadb.conf.d/50-server.cnf\`
+        AND verify port 3306 is in CSF TCP_IN via \`manage_csf_firewall action=check_config\`.
+
+  NEVER run mysql/mariadb commands directly via execute_ssh_command — they get blocked by the safety filter.
+  fix_wordpress_db and diagnose_mysql_auth use safe internal calls that bypass the filter correctly.
 
 RULE T-12C — 502 FORENSICS (MANDATORY):
   If a site returns a 502 error, DO NOT assume the server is healthy just because some services are running.
@@ -600,6 +611,7 @@ SSH TOOLS — DIAGNOSTIC/FALLBACK ONLY (use when API tools don't exist or fail):
   \`fix_nginx_config\`         → Edit Nginx config + restart. Tier 3 — requires approval.
                             Run diagnose_nginx first to get the file_path.
   \`fix_wordpress\`             → Modify wp-config.php to enable WP_DEBUG. Tier 3 — requires approval.
+  \`fix_wordpress_db\`          → Fix "Access denied for user X@localhost" by resetting MariaDB user password to match wp-config.php. Tier 3 — requires approval.
   \`manage_php\` (list)        → List installed PHP versions. Read-only.
   \`manage_php\` (switch)      → Switch PHP-FPM version via SSH (fallback if switch_php_api unavailable).
   \`repair_mysql\` (repair)    → Run mysqlcheck --auto-repair. Tier 3 — requires approval.

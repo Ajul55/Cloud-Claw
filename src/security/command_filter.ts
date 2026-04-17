@@ -101,6 +101,7 @@ const DUAL_PURPOSE_READ_REGEXES: Array<[RegExp, string]> = [
     [/^(sudo\s+)?apt-cache\s+(show|search|policy)\b.*$/i, 'apt-cache read'],
     [/^(sudo\s+)?rpm\s+-q\b.*$/i, 'rpm read'],
     [/^(sudo\s+)?mysql\s+.*-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*".*$/i, 'mysql safe read'],
+    [/^(sudo\s+)?mariadb\s+.*-e\s+"(SHOW|SELECT|DESCRIBE)\b[^"]*".*$/i, 'mariadb safe read'],
     [/^(sudo\s+)?docker\s+(ps|images)\b.*$/i, 'docker safe read'],
     [/^(sudo\s+)?docker\s+(inspect|logs|port|stats\s+--no-stream|container\s+ls)\b.*$/i, 'docker safe read'],
     [/^(sudo\s+)?docker\s+exec\s+[^\s]+\s+(nginx\s+-T|nginx\s+-t|cat\b|head\b|tail\b|grep\b|ls\b|find\b|stat\b|php\s+-v\b|wp\s+(core\s+version|plugin\s+list|theme\s+list|option\s+get|user\s+list|db\s+check|config\s+get)\b).*/i, 'docker exec safe read'],

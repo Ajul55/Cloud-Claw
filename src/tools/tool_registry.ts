@@ -109,6 +109,7 @@ import { fixWordPressSslRedirectsTool } from './fix_wordpress_ssl_redirects.js';
 import { analyzeHighServerLoadTool } from './analyze_high_server_load.js';
 import { manageVhostRewriteRulesTool } from './manage_vhost_rewrite_rules.js';
 import { diagnoseMysqlAuthTool } from './diagnose_mysql_auth.js';
+import { fixWordpressDbTool } from './fix_wordpress_db.js';
 import { diagnosePhpPoolTool } from './diagnose_php_pool.js';
 import { manageCsfFirewallTool } from './manage_csf_firewall.js';
 import { readCloudstickLogsTool } from './read_cloudstick_logs.js';
@@ -265,6 +266,7 @@ const ALL_TOOLS: Tool[] = [
     analyzeHighServerLoadTool,
     manageVhostRewriteRulesTool,
     diagnoseMysqlAuthTool,
+    fixWordpressDbTool,
     // ── Cloudstick Internal Logs ─────────────────────────────────────────
     readCloudstickLogsTool,
     // ── Tier 1 Fix + Tier 2: Supervisor Jobs ────────────────────────────────

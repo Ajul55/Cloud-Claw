@@ -3,6 +3,7 @@ import { Client as SSHClient } from 'ssh2';
 import { env } from '../config/env.js';
 import { getUserByPlatformId, getDecryptedSshKey } from '../services/user_service.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
+import { isSSHCAConfigured, getSignedCert, readCertificate } from '../security/ssh_ca.js';
 
 let cachedKey: Buffer | null = null;
 try {
@@ -74,7 +75,8 @@ async function getPooledConnection(
     host: string,
     port: number,
     user: string,
-    key: Buffer
+    key: Buffer,
+    certificate?: Buffer | null
 ): Promise<SSHClient> {
     const hostKey = poolKey(host, port, user);
 
@@ -97,18 +99,24 @@ async function getPooledConnection(
     if (pool.length >= MAX_CONNECTIONS_PER_HOST) {
         // Wait for a connection to become available
         await new Promise(resolve => setTimeout(resolve, 500));
-        return getPooledConnection(host, port, user, key);
+        return getPooledConnection(host, port, user, key, certificate);
     }
 
     console.log(`[ssh] Creating new SSH connection for ${hostKey}`);
-    const conn = await connectSSH(host, port, user, key);
+    const conn = await connectSSH(host, port, user, key, certificate);
     const pooled: PooledConnection = { conn, inUse: true, lastUsed: Date.now() };
     pool.push(pooled);
     connectionPool.set(hostKey, pool);
     return conn;
 }
 
-function connectSSH(host: string, port: number, user: string, key: Buffer): Promise<SSHClient> {
+function connectSSH(
+    host: string,
+    port: number,
+    user: string,
+    key: Buffer,
+    certificate?: Buffer | null
+): Promise<SSHClient> {
     return new Promise((resolve, reject) => {
         const conn = new SSHClient();
         const timer = setTimeout(() => {
@@ -118,6 +126,9 @@ function connectSSH(host: string, port: number, user: string, key: Buffer): Prom
 
         conn.on('ready', () => {
             clearTimeout(timer);
+            if (certificate) {
+                console.log(`[ssh] Connected to ${host}:${port} using SSH certificate`);
+            }
             resolve(conn);
         });
         conn.on('error', (err) => {
@@ -125,13 +136,19 @@ function connectSSH(host: string, port: number, user: string, key: Buffer): Prom
             reject(err);
         });
 
-        conn.connect({
+        // W1: Pass certificate for CA-based auth when available
+        const connectOpts: Record<string, unknown> = {
             host,
             port,
             username: user,
             privateKey: key,
             readyTimeout: 10_000,
-        });
+        };
+        if (certificate) {
+            (connectOpts as any).certificate = certificate;
+        }
+
+        conn.connect(connectOpts as any);
     });
 }
 
@@ -226,8 +243,24 @@ async function executeSSHCommand(
     const user = options.user ?? env.SSH_USER ?? 'root';
     const timeoutMs = options.timeoutMs ?? 30_000;
 
+    // W1: Try SSH Certificate Authority (short-lived signed cert)
+    let certificate: Buffer | null = null;
+    if (isSSHCAConfigured()) {
+        try {
+            const certPath = await getSignedCert();
+            if (certPath) {
+                certificate = readCertificate(certPath);
+                if (certificate) {
+                    console.log(`[ssh] Using SSH CA certificate for ${host}`);
+                }
+            }
+        } catch (err) {
+            console.warn(`[ssh] SSH CA cert generation failed, falling back to key auth:`, err);
+        }
+    }
+
     // Use connection pool for multiplexing
-    const conn = await getPooledConnection(host, port, user, key);
+    const conn = await getPooledConnection(host, port, user, key, certificate);
 
     return new Promise((resolve, reject) => {
         let output = '';

@@ -1,7 +1,7 @@
 import { getPool, isDBConfigured, clearSession } from '../database/db.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { setGlobalLLMOverride, getCurrentLLMConfig } from '../llm/provider.js';
-import { setCloudstickUser } from '../api/cloudstick_context.js';
+import { runWithCloudstickContext } from '../api/cloudstick_context.js';
 import { setUserCloudstickCredentials, setUserSshKey, getUserByPlatformId } from '../services/user_service.js';
 import { decodeCloudstickJwtUserId } from '../utils/crypto.js';
 import type { ReplyFn } from '../tools/types.js';
@@ -338,11 +338,10 @@ async function handleNodes(
         return;
     }
 
-    // Set per-user Cloudstick context so getAllServers() uses the right credentials
+    // W5: Set per-user Cloudstick context so getAllServers() uses the right credentials
     const user = await getUserByPlatformId(platform, userId);
-    setCloudstickUser(user);
 
-    try {
+    await runWithCloudstickContext(user, async () => {
         const rows = await getAllServers();
 
         if (rows.length === 0) {
@@ -359,9 +358,7 @@ async function handleNodes(
         }
 
         await replyFn(msg, { parse_mode: 'Markdown' });
-    } finally {
-        setCloudstickUser(null); // Clear context after use
-    }
+    });
 }
 
 async function handleUsage(replyFn: ReplyFn) {

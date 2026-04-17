@@ -16,6 +16,7 @@ import { runAgentLoop } from '../agents/loop.js';
 import { getSession } from '../database/db.js';
 import { buildApprovalMessage } from '../hitl/approval_message.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
+import { enqueueApproval } from '../jobs/approval_worker.js';
 import { handleSlashCommand } from '../commands/slash_handler.js';
 import { StatusIndicator } from '../utils/status_indicator.js';
 import type { ApprovalFn, ReplyFn } from '../tools/types.js';
@@ -197,16 +198,20 @@ export function createSlackApp(): SlackAppInstance {
             }).catch(() => { });
         }
 
-        await resumeApprovedSession(
-            approvalId,
-            true,
-            userId,
-            async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
-            async (context) => {
-                const { slackBlocks } = buildApprovalMessage(context);
-                await client.chat.postMessage({ channel: channelId, text: 'Approval Required', blocks: slackBlocks });
-            }
-        );
+        // W4: Try async queue first, fall back to synchronous execution
+        const enqueued = await enqueueApproval(approvalId, userId, true);
+        if (!enqueued) {
+            await resumeApprovedSession(
+                approvalId,
+                true,
+                userId,
+                async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
+                async (context) => {
+                    const { slackBlocks } = buildApprovalMessage(context);
+                    await client.chat.postMessage({ channel: channelId, text: 'Approval Required', blocks: slackBlocks });
+                }
+            );
+        }
     });
 
     // ─── HITL: Reject ───────────────────────────────────────────────────────────
@@ -239,14 +244,18 @@ export function createSlackApp(): SlackAppInstance {
             }).catch(() => { });
         }
 
-        await resumeApprovedSession(
-            approvalId,
-            false,
-            userId,
-            async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
-            async () => { },
-            reason,
-        );
+        // W4: Try async queue first, fall back to synchronous execution
+        const enqueued = await enqueueApproval(approvalId, userId, false, reason);
+        if (!enqueued) {
+            await resumeApprovedSession(
+                approvalId,
+                false,
+                userId,
+                async (text) => { await client.chat.postMessage({ channel: channelId, text }); },
+                async () => { },
+                reason,
+            );
+        }
     });
 
     // ─── Interactive: Server Selection ────────────────────────────────────────

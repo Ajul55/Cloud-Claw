@@ -47,6 +47,10 @@ export async function connectDB(): Promise<void> {
             // Lightweight migrations: ensure new columns exist
             await pool.query(`ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS receipts JSONB NOT NULL DEFAULT '{}'::JSONB;`);
 
+            // W7: Ensure fix_memory has created_at + index for TTL cleanup
+            await pool.query(`ALTER TABLE IF EXISTS fix_memory ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
+            await pool.query(`CREATE INDEX IF NOT EXISTS idx_fix_memory_created ON fix_memory(created_at);`);
+
             // Expire approvals that were left pending for over 10 minutes.
             await pool.query(`
                 UPDATE approval_queue
@@ -340,6 +344,34 @@ export async function getLatestPendingApproval(sessionId: string): Promise<Appro
         [sessionId]
     );
     return rows[0] ?? null;
+}
+
+// ─── W7: fix_memory TTL cleanup ────────────────────────────────────────────────
+
+/**
+ * Delete fix_memory records older than the specified number of days.
+ * Prevents the embeddings table from growing unbounded.
+ * Called on a schedule (e.g., daily via cron or pg-boss).
+ */
+export async function cleanupOldFixes(maxAgeDays = 90): Promise<number> {
+    if (!isDBConfigured()) return 0;
+
+    try {
+        const result = await getPool().query(
+            `DELETE FROM fix_memory
+             WHERE created_at < NOW() - INTERVAL '1 day' * $1
+             RETURNING id`,
+            [maxAgeDays]
+        );
+        const count = result.rowCount ?? 0;
+        if (count > 0) {
+            console.log(`[fix_memory] TTL cleanup: deleted ${count} records older than ${maxAgeDays} days`);
+        }
+        return count;
+    } catch (err) {
+        console.warn('[fix_memory] TTL cleanup failed (non-fatal):', err);
+        return 0;
+    }
 }
 
 export async function clearSession(id: string): Promise<void> {
