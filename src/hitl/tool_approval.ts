@@ -22,29 +22,53 @@ export function isSensitiveApprovalArg(key: string): boolean {
 }
 
 export function encodeToolApprovalCommand(toolName: string, args: Record<string, string>): string {
-    const encodedArgs = Object.entries(args)
-        .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
-        .join('|');
-
-    return encodedArgs ? `${TOOL_PREFIX}${toolName}|${encodedArgs}` : `${TOOL_PREFIX}${toolName}`;
+    // New format: TOOL:toolName|<encodeURIComponent(JSON.stringify(args))>
+    // No delimiter collision possible — args is a single encoded blob
+    const encodedArgs = encodeURIComponent(JSON.stringify(args));
+    return `${TOOL_PREFIX}${toolName}|${encodedArgs}`;
 }
 
 export function decodeToolApprovalCommand(command: string): ToolApprovalPayload | null {
     if (!command.startsWith(TOOL_PREFIX)) return null;
 
-    const parts = command.split('|');
-    const toolName = parts[0].slice(TOOL_PREFIX.length).trim();
+    const afterPrefix = command.slice(TOOL_PREFIX.length);
+    const pipeIdx = afterPrefix.indexOf('|');
+
+    if (pipeIdx === -1) {
+        // No args at all
+        const toolName = afterPrefix.trim();
+        return toolName ? { toolName, args: {} } : null;
+    }
+
+    const toolName = afterPrefix.slice(0, pipeIdx).trim();
     if (!toolName) return null;
 
+    const encodedArgs = afterPrefix.slice(pipeIdx + 1);
+
+    // New format: single JSON blob (encoded with encodeURIComponent, starts with %7B when encoded {)
+    if (encodedArgs.startsWith('%7B') || encodedArgs.startsWith('%7b')) {
+        try {
+            const args = JSON.parse(decodeURIComponent(encodedArgs)) as Record<string, string>;
+            return { toolName, args };
+        } catch {
+            // Fall through to legacy decoder
+        }
+    }
+
+    // Legacy format: key=encodeURIComponent(value) separated by |
+    // Support this for existing pending approvals in the database
     const args: Record<string, string> = {};
-    for (const part of parts.slice(1)) {
+    for (const part of encodedArgs.split('|')) {
         const eq = part.indexOf('=');
         if (eq <= 0) continue;
         const key = part.slice(0, eq);
         const rawValue = part.slice(eq + 1);
-        args[key] = decodeURIComponent(rawValue);
+        try {
+            args[key] = decodeURIComponent(rawValue);
+        } catch {
+            args[key] = rawValue;
+        }
     }
-
     return { toolName, args };
 }
 
