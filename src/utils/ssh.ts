@@ -96,10 +96,29 @@ async function getPooledConnection(
     }
 
     // Need a new connection — respect per-host limit
-    if (pool.length >= MAX_CONNECTIONS_PER_HOST) {
-        // Wait for a connection to become available
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return getPooledConnection(host, port, user, key, certificate);
+    // Wait iteratively for a slot — no recursion, bounded by MAX_WAIT_MS
+    const MAX_WAIT_MS = 30_000;
+    const POLL_INTERVAL_MS = 100;
+    let waited = 0;
+
+    while (pool.length >= MAX_CONNECTIONS_PER_HOST) {
+        // Re-check for a newly freed slot before waiting
+        cleanupPool(hostKey);
+        const freshPool = connectionPool.get(hostKey) ?? [];
+        const free = freshPool.find(p => !p.inUse);
+        if (free) {
+            free.inUse = true;
+            free.lastUsed = Date.now();
+            console.log(`[ssh] Reusing freed connection for ${hostKey} (waited ${waited}ms)`);
+            return free.conn;
+        }
+
+        if (waited >= MAX_WAIT_MS) {
+            throw new Error(`[ssh] Pool exhausted for ${hostKey} — all ${MAX_CONNECTIONS_PER_HOST} connections busy for ${MAX_WAIT_MS}ms`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        waited += POLL_INTERVAL_MS;
     }
 
     console.log(`[ssh] Creating new SSH connection for ${hostKey}`);
