@@ -40,4 +40,16 @@ describe('fix_nginx_config path whitelist', () => {
         const result = await fixNginxConfigTool.execute({ server_label: 'test', file_path: '/etc/nginx/sites-available/default' });
         expect(String(result.output)).not.toMatch(/blocked/i);
     });
+
+    it('rejects /etc/nginx/../../etc/passwd (path traversal)', async () => {
+        const result = await fixNginxConfigTool.execute({ server_label: 'test', file_path: '/etc/nginx/../../etc/passwd' });
+        expect(result.success).toBe(false);
+        expect(String(result.output)).toMatch(/blocked/i);
+    });
+
+    it('rejects /etc/nginx-cs/../../../etc/sudoers (path traversal)', async () => {
+        const result = await fixNginxConfigTool.execute({ server_label: 'test', file_path: '/etc/nginx-cs/../../../etc/sudoers' });
+        expect(result.success).toBe(false);
+        expect(String(result.output)).toMatch(/blocked/i);
+    });
 });

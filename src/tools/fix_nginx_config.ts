@@ -1,3 +1,4 @@
+import { normalize } from 'path';
 import { sshExec } from '../utils/ssh.js';
 import { formatServerTarget, resolveServerArg } from '../utils/server_registry.js';
 import type { Tool, ToolResult } from './types.js';
@@ -49,7 +50,9 @@ export const fixNginxConfigTool: Tool = {
         if (!isSafeUnixPath(filePath)) {
             return { success: false, output: `Error: Invalid file_path: ${filePath}` };
         }
-        if (!ALLOWED_NGINX_PATH_PREFIXES.some(prefix => filePath.startsWith(prefix))) {
+        // Normalize to collapse any .. or . segments before checking prefix
+        const normalizedPath = normalize(filePath);
+        if (!ALLOWED_NGINX_PATH_PREFIXES.some(prefix => normalizedPath.startsWith(prefix))) {
             return {
                 success: false,
                 output: `BLOCKED: file_path must be within an nginx config directory (got: ${filePath})`,
