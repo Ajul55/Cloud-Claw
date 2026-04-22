@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { env } from '../config/env.js';
 import { getCloudstickUser } from './cloudstick_context.js';
+import { getDecryptedCloudstickCredentials } from '../services/user_service.js';
 
 export interface CloudstickClientOptions {
     apiKey?: string;
@@ -38,8 +39,9 @@ export class CloudstickApiClient {
     public async request<T = any>(config: AxiosRequestConfig): Promise<T> {
         // Per-user context takes priority; fall back to instance credentials (env)
         const ctx = getCloudstickUser();
-        const effectiveKey = ctx?.cloudstick_api_key ?? this.apiKey;
-        const effectiveSecret = ctx?.cloudstick_api_secret ?? this.apiSecret;
+        const ctxCreds = ctx ? getDecryptedCloudstickCredentials(ctx) : null;
+        const effectiveKey = ctxCreds?.apiKey ?? this.apiKey;
+        const effectiveSecret = ctxCreds?.apiSecret ?? this.apiSecret;
 
         if (!effectiveKey || !effectiveSecret) {
             throw new Error('Cloudstick API_KEY and API_SECRET are required (set in .env or per-user via /setup)');

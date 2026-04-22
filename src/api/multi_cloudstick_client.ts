@@ -8,7 +8,7 @@
 
 import { CloudstickApiClient } from './cloudstick_client.js';
 import type { CloudclawUser } from '../services/user_service.js';
-import { hasCloudstickCredentials } from '../services/user_service.js';
+import { hasCloudstickCredentials, getDecryptedCloudstickCredentials } from '../services/user_service.js';
 
 export class MultiCloudstickApiClient {
     private clients = new Map<string, CloudstickApiClient>();
@@ -26,9 +26,10 @@ export class MultiCloudstickApiClient {
         }
 
         if (!this.clients.has(user.platform_id)) {
+            const { apiKey, apiSecret } = getDecryptedCloudstickCredentials(user);
             const client = new CloudstickApiClient({
-                apiKey: user.cloudstick_api_key!,
-                apiSecret: user.cloudstick_api_secret!,
+                apiKey: apiKey!,
+                apiSecret: apiSecret!,
             });
             this.clients.set(user.platform_id, client);
         }

@@ -49,11 +49,11 @@ export async function upsertUser(
 
         if (data.cloudstick_api_key !== undefined) {
             fields.push(`cloudstick_api_key = $${idx++}`);
-            values.push(data.cloudstick_api_key);
+            values.push(data.cloudstick_api_key ? encrypt(data.cloudstick_api_key) : null);
         }
         if (data.cloudstick_api_secret !== undefined) {
             fields.push(`cloudstick_api_secret = $${idx++}`);
-            values.push(data.cloudstick_api_secret);
+            values.push(data.cloudstick_api_secret ? encrypt(data.cloudstick_api_secret) : null);
         }
         if (data.cloudstick_user_id !== undefined) {
             fields.push(`cloudstick_user_id = $${idx++}`);
@@ -89,8 +89,8 @@ export async function upsertUser(
             [
                 platform,
                 platformId,
-                data.cloudstick_api_key ?? null,
-                data.cloudstick_api_secret ?? null,
+                data.cloudstick_api_key ? encrypt(data.cloudstick_api_key) : null,
+                data.cloudstick_api_secret ? encrypt(data.cloudstick_api_secret) : null,
                 data.cloudstick_user_id ?? null,
                 data.ssh_private_key ?? null,
                 data.ssh_public_key ?? null,
@@ -131,6 +131,24 @@ export async function setUserSshKey(
 export function getDecryptedSshKey(user: CloudclawUser): string | null {
     if (!user.ssh_private_key) return null;
     return decrypt(user.ssh_private_key);
+}
+
+export function getDecryptedCloudstickCredentials(user: CloudclawUser): {
+    apiKey: string | null;
+    apiSecret: string | null;
+} {
+    try {
+        return {
+            apiKey: user.cloudstick_api_key ? decrypt(user.cloudstick_api_key) : null,
+            apiSecret: user.cloudstick_api_secret ? decrypt(user.cloudstick_api_secret) : null,
+        };
+    } catch {
+        // Pre-migration plaintext fallback — value will be re-encrypted on next /setup
+        return {
+            apiKey: user.cloudstick_api_key,
+            apiSecret: user.cloudstick_api_secret,
+        };
+    }
 }
 
 export function hasCloudstickCredentials(user: CloudclawUser): boolean {
