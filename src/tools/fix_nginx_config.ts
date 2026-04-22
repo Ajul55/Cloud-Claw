@@ -10,6 +10,13 @@ function nginxTestPassed(output: string): boolean {
     return /test is successful/i.test(output) && /syntax is ok/i.test(output);
 }
 
+const ALLOWED_NGINX_PATH_PREFIXES = [
+    '/etc/nginx-cs/',
+    '/etc/nginx/',
+    '/usr/local/nginx/',
+    '/CloudStick/Services/nginx-cs/',
+];
+
 export const fixNginxConfigTool: Tool = {
     name: 'fix_nginx_config',
     description:
@@ -41,6 +48,12 @@ export const fixNginxConfigTool: Tool = {
         }
         if (!isSafeUnixPath(filePath)) {
             return { success: false, output: `Error: Invalid file_path: ${filePath}` };
+        }
+        if (!ALLOWED_NGINX_PATH_PREFIXES.some(prefix => filePath.startsWith(prefix))) {
+            return {
+                success: false,
+                output: `BLOCKED: file_path must be within an nginx config directory (got: ${filePath})`,
+            };
         }
 
         const backupPath = `${filePath}.cloudclaw.bak.${Date.now()}`;
