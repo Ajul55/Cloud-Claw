@@ -608,8 +608,8 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         // Fix #11: Base prompt is built inside the loop so clarification block stays fresh
         const troubleshootingContext = getStrategyContext(message.sessionId);
         const baseSystemPrompt = SYSTEM_PROMPT({
-            sshHost: '139.84.130.63',
-            sshUser: 'root',
+            sshHost: env.SSH_HOST ?? 'not configured',
+            sshUser: env.SSH_USER,
             pastFixes: pastFixesStr || undefined,
             clarificationBlock,
             cloudstickServers: cloudstickServersStr,
