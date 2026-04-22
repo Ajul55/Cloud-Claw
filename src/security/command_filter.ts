@@ -77,7 +77,7 @@ const READ_SAFE_BINARIES = new Set([
     'tail', 'cat', 'head', 'grep', 'zcat', 'zgrep', 'less', 'more', 'awk', 'sed', 'sort', 'uniq', 'wc', 'nl',
     'ls', 'find', 'stat', 'file', 'du', 'df', 'tree',
     'free', 'vmstat', 'uptime', 'top', 'ps', 'pgrep', 'lsof', 'last',
-    'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute', 'nmap', 'nc', 'ncat', 'telnet',
+    'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute',
     'whoami', 'id', 'date', 'timedatectl', 'hostname', 'uname',
     'which', 'command', 'type', 'php', // php is read safe if not executing scripts
     'sleep',
@@ -187,6 +187,7 @@ export function checkCommand(command: string, isWriteTool: boolean = false): Fil
             if (char === ';') { subCommands.push(current.trim()); current = ''; continue; }
             if (char === '|' && next === '|') { subCommands.push(current.trim()); current = ''; i++; continue; }
             if (char === '&' && next === '&') { subCommands.push(current.trim()); current = ''; i++; continue; }
+            if (char === '&' && next !== '&') { subCommands.push(current.trim()); current = ''; continue; }
             if (char === '|' && next !== '|') { subCommands.push(current.trim()); current = ''; continue; }
         }
         current += char;
