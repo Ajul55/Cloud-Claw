@@ -36,9 +36,13 @@ function setCachedResult(key: string, result: unknown): void {
     idempotencyCache.set(key, { result, timestamp: Date.now() });
     // Prevent unbounded growth
     if (idempotencyCache.size > 500) {
-        const oldest = [...idempotencyCache.entries()]
-            .sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
-        if (oldest) idempotencyCache.delete(oldest[0]);
+        // Batch evict oldest 20% in one pass — amortised over ~100 writes vs per-write O(n log n)
+        const entries = [...idempotencyCache.entries()]
+            .sort((a, b) => a[1].timestamp - b[1].timestamp);
+        const evictCount = Math.ceil(entries.length * 0.2);
+        for (let i = 0; i < evictCount; i++) {
+            idempotencyCache.delete(entries[i][0]);
+        }
     }
 }
 
