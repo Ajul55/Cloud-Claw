@@ -281,7 +281,7 @@ export async function resolveApproval(
 ): Promise<ApprovalRecord | null> {
     if (!isDBConfigured()) {
         const record = memoryApprovals.get(id);
-        if (!record) return null;
+        if (!record || record.status !== 'pending') return null;
         record.status = status;
         record.resolved_at = new Date();
         return record;
