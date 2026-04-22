@@ -8,8 +8,8 @@ import { Pool } from 'pg';
 import { encrypt } from '../utils/crypto.js';
 
 function isAlreadyEncrypted(value: string): boolean {
-    // Encrypted format: hex:hex:hex (iv:tag:ciphertext — all hex segments)
-    return /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/.test(value);
+    // AES-256-GCM output: iv=16 bytes=32 hex chars, tag=16 bytes=32 hex chars, ciphertext >= 1 byte
+    return /^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{2,}$/.test(value);
 }
 
 async function main() {

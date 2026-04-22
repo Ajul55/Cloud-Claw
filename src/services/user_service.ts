@@ -142,8 +142,9 @@ export function getDecryptedCloudstickCredentials(user: CloudclawUser): {
             apiKey: user.cloudstick_api_key ? decrypt(user.cloudstick_api_key) : null,
             apiSecret: user.cloudstick_api_secret ? decrypt(user.cloudstick_api_secret) : null,
         };
-    } catch {
+    } catch (err) {
         // Pre-migration plaintext fallback — value will be re-encrypted on next /setup
+        console.warn('[user_service] Failed to decrypt Cloudstick credentials — returning plaintext fallback. Run migration script if this persists after deployment.', err);
         return {
             apiKey: user.cloudstick_api_key,
             apiSecret: user.cloudstick_api_secret,
