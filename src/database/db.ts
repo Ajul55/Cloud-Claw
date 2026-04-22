@@ -46,6 +46,7 @@ export async function connectDB(): Promise<void> {
         try {
             // Lightweight migrations: ensure new columns exist
             await pool.query(`ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS receipts JSONB NOT NULL DEFAULT '{}'::JSONB;`);
+            await pool.query(`ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;`);
 
             // W7: Ensure fix_memory has created_at + index for TTL cleanup
             await pool.query(`ALTER TABLE IF EXISTS fix_memory ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
@@ -174,6 +175,7 @@ export interface SessionRecord {
     messages: Array<Record<string, unknown>>;
     receipts?: Record<string, unknown>;
     iteration: number;
+    version: number;
     status?: string;
     created_at: Date;
     updated_at: Date;
@@ -196,13 +198,23 @@ export async function upsertSession(
     session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'iteration' | 'reply_target'> & {
         messages: Array<Record<string, unknown>>;
         receipts?: Record<string, unknown>;
+        expectedVersion?: number;  // if provided, use conditional UPDATE (OCC)
     }
 ): Promise<void> {
     if (!isDBConfigured()) {
         const existing = memoryStore.get(session.id);
+        if (
+            session.expectedVersion !== undefined &&
+            existing &&
+            existing.version !== session.expectedVersion
+        ) {
+            console.warn(`[DB] Session ${session.id} version conflict (expected ${session.expectedVersion}, got ${existing.version}) — skipping stale write`);
+            return;
+        }
         memoryStore.set(session.id, {
             ...(session as any),
             receipts: session.receipts ?? existing?.receipts ?? {},
+            version: (existing?.version ?? 0) + 1,
             created_at: existing?.created_at ?? new Date(),
             updated_at: new Date(),
             last_activity: new Date(),
@@ -210,28 +222,59 @@ export async function upsertSession(
         });
         return;
     }
+
     const pool = getPool();
-    await pool.query(
-        `INSERT INTO sessions (id, channel, user_id, reply_target, messages, receipts, iteration)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (id) DO UPDATE SET
-       reply_target  = EXCLUDED.reply_target,
-       messages      = EXCLUDED.messages,
-       receipts      = EXCLUDED.receipts,
-       iteration     = EXCLUDED.iteration,
-       last_activity = NOW(),
-       status        = 'active',
-       updated_at    = NOW()`,
-        [
-            session.id,
-            session.channel,
-            session.user_id,
-            session.reply_target ?? null,
-            JSON.stringify(session.messages),
-            JSON.stringify(session.receipts ?? {}),
-            session.iteration,
-        ]
-    );
+
+    if (session.expectedVersion !== undefined) {
+        // OCC: conditional update — only writes if version matches
+        const result = await pool.query(
+            `UPDATE sessions SET
+               reply_target  = $1,
+               messages      = $2,
+               receipts      = $3,
+               iteration     = $4,
+               last_activity = NOW(),
+               status        = 'active',
+               updated_at    = NOW(),
+               version       = version + 1
+             WHERE id = $5 AND version = $6`,
+            [
+                session.reply_target ?? null,
+                JSON.stringify(session.messages),
+                JSON.stringify(session.receipts ?? {}),
+                session.iteration,
+                session.id,
+                session.expectedVersion,
+            ]
+        );
+        if ((result.rowCount ?? 0) === 0) {
+            console.warn(`[DB] Session ${session.id} version conflict (expected v${session.expectedVersion}) — skipping stale write`);
+        }
+    } else {
+        // Blind upsert (first write / session creation)
+        await pool.query(
+            `INSERT INTO sessions (id, channel, user_id, reply_target, messages, receipts, iteration, version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+         ON CONFLICT (id) DO UPDATE SET
+           reply_target  = EXCLUDED.reply_target,
+           messages      = EXCLUDED.messages,
+           receipts      = EXCLUDED.receipts,
+           iteration     = EXCLUDED.iteration,
+           last_activity = NOW(),
+           status        = 'active',
+           updated_at    = NOW(),
+           version       = sessions.version + 1`,
+            [
+                session.id,
+                session.channel,
+                session.user_id,
+                session.reply_target ?? null,
+                JSON.stringify(session.messages),
+                JSON.stringify(session.receipts ?? {}),
+                session.iteration,
+            ]
+        );
+    }
 }
 
 // ─── Approval Queue ────────────────────────────────────────────────────────────

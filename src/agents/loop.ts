@@ -319,6 +319,7 @@ async function _runAgentLoopCore(
 
     // 1. Load or create session
     const session = await getSession(message.sessionId);
+    const sessionVersion = session?.version ?? 0;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let messages: OpenAI.ChatCompletionMessageParam[] = (session?.messages ?? []) as any;
 
@@ -505,6 +506,7 @@ async function _runAgentLoopCore(
                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                 receipts: serializeReceipts(executionReceipts),
                 iteration,
+                expectedVersion: sessionVersion,
             });
             await indicator?.stop(true);
             return;
@@ -577,6 +579,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
             receipts: serializeReceipts(executionReceipts),
             iteration,
+            expectedVersion: sessionVersion,
         });
         await indicator?.stop(true);
         return;
@@ -1046,6 +1049,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                     receipts: serializeReceipts(executionReceipts),
                     iteration,
+                    expectedVersion: sessionVersion,
                 });
                 const saved = await createApproval({
                     session_id: message.sessionId,
@@ -1090,6 +1094,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                     receipts: serializeReceipts(executionReceipts),
                     iteration,
+                    expectedVersion: sessionVersion,
                 });
                 return;
             }
@@ -1139,6 +1144,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                         receipts: serializeReceipts(executionReceipts),
                         iteration,
+                        expectedVersion: sessionVersion,
                     });
                     const saved = await createApproval({
                         session_id: message.sessionId,
@@ -1184,6 +1190,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                         receipts: serializeReceipts(executionReceipts),
                         iteration,
+                        expectedVersion: sessionVersion,
                     });
                     return;
                 }
@@ -1414,6 +1421,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                                 receipts: serializeReceipts(executionReceipts),
                                 iteration,
+                                expectedVersion: sessionVersion,
                             });
                             const saved = await createApproval({
                                 session_id: message.sessionId,
@@ -1463,6 +1471,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
                                 receipts: serializeReceipts(executionReceipts),
                                 iteration,
+                                expectedVersion: sessionVersion,
                             });
                             return; // PAUSE — wait for HITL
                         } else {
@@ -1564,6 +1573,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
         receipts: serializeReceipts(executionReceipts),
         iteration,
+        expectedVersion: sessionVersion,
     });
 
     // Note: HITL resume path is implemented in src/hitl/resume.ts.

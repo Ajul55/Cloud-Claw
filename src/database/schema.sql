@@ -47,6 +47,9 @@ SET status = 'active'
 WHERE status IN ('open', 'in_progress')
    OR status IS NULL;
 
+-- Optimistic concurrency version counter
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+
 -- ─── HITL Approval Queue ──────────────────────────────────────────────────────
 -- Stores pending Tier-3 actions waiting for human approval.
 CREATE TABLE IF NOT EXISTS approval_queue (
