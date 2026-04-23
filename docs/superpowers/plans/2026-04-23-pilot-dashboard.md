@@ -1335,12 +1335,14 @@ interface Props {
   range: Range;
 }
 
+const TZ = 'Asia/Kolkata';
+
 function formatLabel(bucket: string, range: Range): string {
   const d = new Date(bucket);
   if (range === '24h') {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: TZ });
   }
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', timeZone: TZ });
 }
 
 export function BurnRateChart({ data, range }: Props) {
@@ -1629,10 +1631,20 @@ const LANE_BADGE: Record<1 | 2 | 3, { label: string; bg: string; color: string }
   3: { label: 'SSH Write', bg: '#fee2e2', color: '#dc2626' },
 };
 
+const TZ = 'Asia/Kolkata';
+
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-IN', {
+    timeZone: TZ,
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 export function SessionsTable({ sessions }: Props) {
@@ -1664,6 +1676,7 @@ export function SessionsTable({ sessions }: Props) {
           <th style={th}>Tokens</th>
           <th style={th}>Cost</th>
           <th style={th}>Lane</th>
+          <th style={th}>Time (IST)</th>
         </tr>
       </thead>
       <tbody>
@@ -1690,6 +1703,7 @@ export function SessionsTable({ sessions }: Props) {
                   {badge.label}
                 </span>
               </td>
+              <td style={{ ...td, color: '#94a3b8', fontSize: 11 }}>{fmtTime(s.createdAt)}</td>
             </tr>
           );
         })}
