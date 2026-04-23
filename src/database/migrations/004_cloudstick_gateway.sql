@@ -4,5 +4,5 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS cloudstick_account_id TEXT UNIQUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_user_id          TEXT UNIQUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_workspace_id     TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_tier              TEXT NOT NULL DEFAULT 'starter';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_tier              TEXT NOT NULL DEFAULT 'starter' CHECK (plan_tier IN ('starter', 'pro', 'business'));
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_updated_at        TIMESTAMPTZ;

@@ -59,7 +59,7 @@ const EnvSchema = z.object({
     ENCRYPTION_KEY: z.string().optional(),
 
     // Cloudstick gateway shared secret — 64-char hex
-    CLOUDSTICK_GATEWAY_KEY: z.string().length(64).optional(),
+    CLOUDSTICK_GATEWAY_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().regex(/^[0-9a-f]{64}$/).optional()),
 });
 
 function loadEnv() {
