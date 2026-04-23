@@ -31,10 +31,20 @@ function closeBus(sessionId: string): void {
     sessionBus.delete(sessionId);
 }
 
+const MAX_BODY_BYTES = 50 * 1024; // 50 KB
+
 function readBody(req: http.IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
-        req.on('data', (c: Buffer) => chunks.push(c));
+        let totalBytes = 0;
+        req.on('data', (c: Buffer) => {
+            totalBytes += c.length;
+            if (totalBytes > MAX_BODY_BYTES) {
+                reject(new Error('Request body too large'));
+                return;
+            }
+            chunks.push(c);
+        });
         req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
         req.on('error', reject);
     });
@@ -54,13 +64,13 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
     if (!accountId) return json(res, 400, { error: 'Missing header: X-Cloudstick-Account-Id' });
     if (!plan || !VALID_PLANS.has(plan)) return json(res, 400, { error: 'Missing or invalid header: X-Cloudstick-Plan (starter|pro|business)' });
 
-    let parsed: { message?: string; sessionId?: string };
+    let parsed: { message?: string };
     try { parsed = JSON.parse(await readBody(req)); }
     catch { return json(res, 400, { error: 'Invalid JSON body' }); }
 
     if (!parsed.message?.trim()) return json(res, 400, { error: 'Required field: message' });
 
-    const sessionId = parsed.sessionId ?? `cloudstick:${accountId}`;
+    const sessionId = `cloudstick:${accountId}`;
     const user = await upsertCloudstickUser(accountId, plan);
 
     const onReply: ReplyFn = async (text) => emitSSE(sessionId, 'chunk', { text });
@@ -76,9 +86,20 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
     };
 
     // Run agent loop in background — don't block the POST response
+    const sessionTimeout = setTimeout(() => {
+        console.warn('[gateway] Session', sessionId, 'exceeded 5-minute timeout — force closing bus');
+        emitSSE(sessionId, 'error', { message: 'Session timed out.' });
+        closeBus(sessionId);
+    }, 5 * 60 * 1000);
+
     Promise.resolve(runWithCloudstickContext(user, () => runAgentLoop(msg, onReply, onApproval)))
-        .then(() => { emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
-        .catch((err: Error) => { emitSSE(sessionId, 'error', { message: err.message }); closeBus(sessionId); });
+        .then(() => { clearTimeout(sessionTimeout); emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
+        .catch((err: Error) => {
+            clearTimeout(sessionTimeout);
+            console.error('[gateway] Agent loop error for session', sessionId, ':', err);
+            emitSSE(sessionId, 'error', { message: 'An error occurred processing your request.' });
+            closeBus(sessionId);
+        });
 
     json(res, 202, {
         sessionId,
@@ -149,11 +170,18 @@ async function handleSlackLink(req: http.IncomingMessage, res: http.ServerRespon
         return json(res, 400, { error: 'Required: slackUserId (string)' });
     }
 
-    await linkSlackToCloudstickUser(
-        accountId,
-        parsed.slackUserId,
-        typeof parsed.slackWorkspaceId === 'string' ? parsed.slackWorkspaceId : null,
-    );
+    try {
+        await linkSlackToCloudstickUser(
+            accountId,
+            parsed.slackUserId,
+            typeof parsed.slackWorkspaceId === 'string' ? parsed.slackWorkspaceId : null,
+        );
+    } catch (err) {
+        if (err instanceof Error && err.message === 'SLACK_ALREADY_LINKED') {
+            return json(res, 409, { error: 'This Slack user is already linked to a different account.' });
+        }
+        throw err;
+    }
     json(res, 200, { linked: true });
 }
 
