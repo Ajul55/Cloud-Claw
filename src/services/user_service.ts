@@ -208,9 +208,21 @@ export async function linkSlackToCloudstickUser(
     slackWorkspaceId: string | null,
 ): Promise<void> {
     const pool = getPool();
+
+    // Check if this Slack user ID is already linked to a different account
+    const existing = await pool.query<{ cloudstick_account_id: string }>(
+        `SELECT cloudstick_account_id FROM users WHERE slack_user_id = $1 LIMIT 1`,
+        [slackUserId],
+    );
+
+    if (existing.rows.length > 0 && existing.rows[0].cloudstick_account_id !== cloudstickAccountId) {
+        throw new Error('SLACK_ALREADY_LINKED');
+    }
+
     await pool.query(
-        `UPDATE users SET slack_user_id = $2, slack_workspace_id = $3
+        `UPDATE users
+         SET slack_user_id = $2, slack_workspace_id = $3, updated_at = NOW()
          WHERE cloudstick_account_id = $1`,
-        [cloudstickAccountId, slackUserId, slackWorkspaceId]
+        [cloudstickAccountId, slackUserId, slackWorkspaceId],
     );
 }
