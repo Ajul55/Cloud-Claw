@@ -11,8 +11,22 @@
 import http from 'http';
 import { getPool, isDBConfigured } from './database/db.js';
 
-export function startHealthServer(port = 9000): void {
+type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+
+export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler): void {
     const server = http.createServer(async (req, res) => {
+        if (gatewayHandler && req.url?.startsWith('/api/')) {
+            try {
+                await gatewayHandler(req, res);
+            } catch (err) {
+                if (!res.headersSent) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Internal server error' }));
+                }
+            }
+            return;
+        }
+
         if (req.url !== '/health') {
             res.writeHead(404);
             res.end();
@@ -55,6 +69,7 @@ export function startHealthServer(port = 9000): void {
 
     server.listen(port, () => {
         console.log(`[health] Listening on :${port}/health`);
+        if (gatewayHandler) console.log(`[health] Gateway mounted on :${port}/api/`);
     });
 
     // Don't let the health server keep the process alive if everything else shuts down

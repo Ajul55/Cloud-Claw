@@ -103,6 +103,12 @@ const SSH_TOOLS = new Set([
     'fix_wordpress', 'create_nginx_vhost'
 ]);
 
+const SSH_CALL_LIMITS: Record<string, number> = {
+    starter: 10,
+    pro: 30,
+    business: 50,
+};
+
 const MEMORY_TOOLS = new Set([
     'fix_nginx_config', 'fix_wordpress', 'renew_ssl', 'manage_php',
     'repair_mysql', 'cleanup_disk', 'execute_ssh_write', 'cloudflare_cache_purge',
@@ -316,6 +322,8 @@ async function _runAgentLoopCore(
 ): Promise<void> {
     // 0. Clear any suppressed-tools state from prior turns in this session
     suppressedToolsMap.delete(message.sessionId);
+
+    const sshCallLimit = SSH_CALL_LIMITS[message.planTier ?? 'pro'] ?? 30;
 
     // 1. Load or create session
     const session = await getSession(message.sessionId);
@@ -1227,11 +1235,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             const sshCallCount = [...currentLegCounts.entries()]
                 .filter(([t]) => SSH_TOOLS.has(t))
                 .reduce((sum, [, n]) => sum + n, 0);
-            if (sshCallCount >= 30) {
+            if (sshCallCount >= sshCallLimit) {
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    content: 'BLOCKED: SSH rate limit reached for this session (30 tool executions). Summarize findings and stop.',
+                    content: `BLOCKED: SSH rate limit reached for this session (${sshCallLimit} tool executions). Summarize findings and stop.`,
                 });
                 continue;
             }
@@ -1491,11 +1499,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             }
 
                             // Rate Limiter Guard for direct execution
-                            if (sshCallCount >= 30) {
+                            if (sshCallCount >= sshCallLimit) {
                                 messages.push({
                                     role: 'tool',
                                     tool_call_id: fixCallId,
-                                    content: `BLOCKED: SSH rate limit reached for this session (30 tool executions).`,
+                                    content: `BLOCKED: SSH rate limit reached for this session (${sshCallLimit} tool executions).`,
                                 });
                                 continue;
                             }

@@ -20,6 +20,8 @@ import { enqueueApproval } from '../jobs/approval_worker.js';
 import { handleSlashCommand } from '../commands/slash_handler.js';
 import { StatusIndicator } from '../utils/status_indicator.js';
 import type { ApprovalFn, ReplyFn } from '../tools/types.js';
+import { getUserBySlackUserId } from '../services/user_service.js';
+import { runWithCloudstickContext } from '../api/cloudstick_context.js';
 
 let slackAppRef: SlackAppInstance | null = null;
 
@@ -49,13 +51,20 @@ export function createSlackApp(): SlackAppInstance {
         const cleanText = text.replace(/<@[^>]+>/g, '').trim();
         if (!cleanText) return;
 
-        // Identity whitelist — relaxed temporarily since the .env contains a channel ID
-        if (env.SLACK_USER_ID && env.SLACK_USER_ID.startsWith('U') && user !== env.SLACK_USER_ID) {
-            console.warn(`[Slack] Ignored message from unauthorized user: ${user}`);
-            return;
+        // Try to find a Cloudstick business user linked to this Slack user ID
+        const cloudstickUser = await getUserBySlackUserId(user);
+
+        if (!cloudstickUser) {
+            // Fall back to legacy single-user whitelist for non-Cloudstick users
+            if (env.SLACK_USER_ID && env.SLACK_USER_ID.startsWith('U') && user !== env.SLACK_USER_ID) {
+                console.warn(`[Slack] Ignored message from unauthorized user: ${user}`);
+                return;
+            }
         }
 
-        const sessionId = `slack:${user}`;
+        const sessionId = cloudstickUser
+            ? `cloudstick:${cloudstickUser.cloudstick_account_id}`
+            : `slack:${user}`;
         const lowerText = cleanText.toLowerCase().trim();
         const isContinueRequest = /^(?:@cloudclaw\s+)?(?:continue|keep going)\b/.test(lowerText);
         console.log(`[Slack] Message from ${user} in ${channel}: ${cleanText.slice(0, 80)}`);
@@ -114,12 +123,18 @@ export function createSlackApp(): SlackAppInstance {
                     : 'continue previous investigation from the saved session. Resume from the latest unresolved finding and next step.';
             }
 
-            await runAgentLoop(
-                { sessionId, channel: 'slack', userId: user, text: loopText, replyTarget: channel },
+            const runLoop = () => runAgentLoop(
+                { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel },
                 onReply,
                 onApproval,
                 indicator
             );
+
+            if (cloudstickUser) {
+                await runWithCloudstickContext(cloudstickUser, runLoop);
+            } else {
+                await runLoop();
+            }
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             console.error('[Slack] Loop error:', errMsg);
