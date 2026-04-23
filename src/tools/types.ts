@@ -41,9 +41,9 @@ export interface ToolResult {
 
 /** Sent from an interface (Telegram / Slack) into the agent loop */
 export interface IncomingMessage {
-    /** Unique session key, e.g. "telegram:123456789" */
+    /** Unique session key, e.g. "telegram:123456789" or "cloudstick:acc_123" */
     sessionId: string;
-    channel: 'telegram' | 'slack';
+    channel: 'telegram' | 'slack' | 'cloudstick';
     userId: string;
     text: string;
     /** Concrete reply target (Slack channel ID, Telegram chat ID) */
@@ -56,6 +56,8 @@ export interface IncomingMessage {
      *  Bypasses the shouldPauseForClarification gate so the loop continues instead of
      *  showing the card again. */
     isProceedClarification?: boolean;
+    /** Plan tier for Cloudstick business users — drives SSH call rate limits. */
+    planTier?: 'starter' | 'pro' | 'business';
 }
 
 /** Callback used by the loop to send text back to the user */
