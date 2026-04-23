@@ -402,6 +402,7 @@ async function _runAgentLoopCore(
     const isResume = (Array.isArray(message.resumedTools) && message.resumedTools.length > 0) || isFastPathApproval || isFastPathRejection;
 
     let executionReceipts: Map<string, ToolReceipt>;
+    let lastToolExecutionHost: string | null = null;
     if (message.text && !isResume) {
         // New user intent — start fresh, don't inherit receipts from previous conversation turns
         executionReceipts = new Map<string, ToolReceipt>();
@@ -822,7 +823,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             }
 
             // ─── Fix #3: Hallucination detection — delegated to hallucination_guard.ts ──
-            const isHallucination = checkForHallucination(text, executionReceipts, RECEIPT_FRESHNESS_MS);
+            const isHallucination = checkForHallucination(text, executionReceipts, RECEIPT_FRESHNESS_MS, lastToolExecutionHost ?? undefined);
 
             if (isHallucination) {
                 console.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution');
@@ -1327,6 +1328,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 receiptOutputOrHash,
                 isAlreadyHashed
             );
+            lastToolExecutionHost = receiptHost;
             // Fix #4: increment tool count in Map
             currentLegCounts.set(toolName, (currentLegCounts.get(toolName) ?? 0) + 1);
 
@@ -1521,6 +1523,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             });
 
                             recordReceipt(executionReceipts, 'fix_nginx_config', fixResult.success, receiptHost, fixSanitized.output);
+                            lastToolExecutionHost = receiptHost;
                             currentLegCounts.set('fix_nginx_config', (currentLegCounts.get('fix_nginx_config') ?? 0) + 1);
                             console.log(`[loop] ✅ AUTO-CHAIN COMPLETE: fix_nginx_config — success=${fixResult.success}`);
                         }

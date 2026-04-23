@@ -53,3 +53,30 @@ describe('Hallucination Guard', () => {
         expect(checkForHallucination('nginx configuration is in /etc/nginx/nginx.conf', receipts, 1000)).toBe(false);
     });
 });
+
+describe('host-aware hallucination guard', () => {
+    function makeReceipt(host: string, toolName = 'fix_nginx_config', success = true): ToolReceipt {
+        return { toolName, success, host, timestamp: Date.now(), outputHash: 'abc123' };
+    }
+
+    it('does NOT flag write claim when write receipt exists for the SAME host', () => {
+        const receipts = new Map([['fix_nginx_config', makeReceipt('10.0.0.1')]]);
+        expect(checkForHallucination('Nginx is now fixed and running', receipts, 60_000, '10.0.0.1')).toBe(false);
+    });
+
+    it('DOES flag write claim when write receipt is for a DIFFERENT host', () => {
+        const receipts = new Map([['fix_nginx_config', makeReceipt('10.0.0.1')]]);
+        expect(checkForHallucination('Nginx is now fixed and running', receipts, 60_000, '10.0.0.2')).toBe(true);
+    });
+
+    it('falls back to host-agnostic check when no currentHost provided', () => {
+        const receipts = new Map([['fix_nginx_config', makeReceipt('10.0.0.1')]]);
+        // host-agnostic: any write receipt satisfies the check
+        expect(checkForHallucination('Nginx is now fixed and running', receipts, 60_000)).toBe(false);
+    });
+
+    it('DOES flag when write receipt exists but is failed (success=false)', () => {
+        const receipts = new Map([['fix_nginx_config', makeReceipt('10.0.0.1', 'fix_nginx_config', false)]]);
+        expect(checkForHallucination('Nginx is now fixed and running', receipts, 60_000, '10.0.0.1')).toBe(true);
+    });
+});

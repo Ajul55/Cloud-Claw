@@ -50,7 +50,8 @@ interface HallucinationPattern {
 export function checkForHallucination(
     text: string,
     executionReceipts: Map<string, ToolReceipt>,
-    freshnessMs: number
+    freshnessMs: number,
+    currentHost?: string
 ): boolean {
     const hallucinationPatterns: HallucinationPattern[] = [
         // ─── Service state claims — require a WRITE receipt ──────────────
@@ -90,7 +91,17 @@ export function checkForHallucination(
         if (!pattern.test(text)) return false;
 
         if (requiresWriteReceipt) {
-            // Service-state / fix-success claims need a WRITE receipt
+            if (currentHost) {
+                // Host-aware: only a write receipt for this specific host satisfies the claim
+                const hasHostReceipt = [...executionReceipts.values()].some(
+                    r => WRITE_RECEIPTS.includes(r.toolName) &&
+                         r.host === currentHost &&
+                         r.success &&
+                         (Date.now() - r.timestamp) < freshnessMs
+                );
+                return !hasHostReceipt;
+            }
+            // No host context — host-agnostic fallback
             return !hasReceipt(executionReceipts, WRITE_RECEIPTS, true, freshnessMs);
         }
 
