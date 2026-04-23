@@ -16,6 +16,7 @@ import { expireStaleApprovals } from './jobs/expire_approvals.js';
 import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
 import { startHealthServer } from './health.js';
+import { createGatewayHandler } from './interfaces/http_gateway.js';
 
 async function main(): Promise<void> {
     console.log('');
@@ -32,8 +33,8 @@ async function main(): Promise<void> {
         console.log('[DB] No DATABASE_URL configured — running without persistence');
     }
 
-    // 1b. Health check endpoint (for PM2 / load balancer monitoring)
-    startHealthServer(9000);
+    // 1b. Health check endpoint + Cloudstick HTTP gateway
+    startHealthServer(9000, env.CLOUDSTICK_GATEWAY_KEY ? createGatewayHandler() : undefined);
 
     // 2. Telegram (optional)
     let telegramBot: Awaited<ReturnType<typeof import('./interfaces/telegram.js').createTelegramBot>> | null = null;
