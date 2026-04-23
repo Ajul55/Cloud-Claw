@@ -131,15 +131,20 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
         console.error('[IntentClassifier] Failed to classify intent, falling back to false-positive defaults:', err);
     }
 
-    // Fallback: If LLM fails, apply a naive regex override for minimal safety
+    // Fallback: LLM is unavailable. Use keyword heuristics — conservative defaults.
     const isAuditOverride = AUDIT_OVERRIDE_PATTERNS.some(p => p.test(messageText));
     const isApproval = /^(yes|yep|correct|that'?s correct|this is correct|continue|keep going|proceed|go ahead|apply|fix|do it)$/i.test(messageText.trim());
+
+    // Only set requiresTool if the message contains clear operational intent keywords.
+    // This prevents forced tool calls on casual/conversational messages during outages.
+    const OPERATIONAL_KEYWORDS = /\b(nginx|mysql|mariadb|php|ssl|disk|apache|redis|server|website|domain|fix|repair|restart|check|diagnose|audit|scan|status|down|error|fail|crash|timeout)\b/i;
+    const requiresTool = OPERATIONAL_KEYWORDS.test(messageText) || isAuditOverride;
 
     return {
         ...defaultIntent,
         isAudit: isAuditOverride,
         isApprovalResponse: isApproval,
-        requiresTool: true, // Fail-safe to allow tools to run if classifier breaks
-        toolHint: 'execute_ssh_command' // Most generic fallback
+        requiresTool,
+        toolHint: requiresTool ? 'execute_ssh_command' : 'none',
     };
 }
