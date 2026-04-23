@@ -57,6 +57,9 @@ const EnvSchema = z.object({
 
     // Hub-level encryption key for SSH private keys at rest (32-byte hex = 64 chars)
     ENCRYPTION_KEY: z.string().optional(),
+
+    // Cloudstick gateway shared secret — 64-char hex
+    CLOUDSTICK_GATEWAY_KEY: z.string().length(64).optional(),
 });
 
 function loadEnv() {
