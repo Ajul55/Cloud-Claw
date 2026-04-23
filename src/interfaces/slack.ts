@@ -22,6 +22,7 @@ import { StatusIndicator } from '../utils/status_indicator.js';
 import type { ApprovalFn, ReplyFn } from '../tools/types.js';
 import { getUserBySlackUserId } from '../services/user_service.js';
 import { runWithCloudstickContext } from '../api/cloudstick_context.js';
+import { acquireSession, releaseSession } from '../services/session_limiter.js';
 
 let slackAppRef: SlackAppInstance | null = null;
 
@@ -123,6 +124,15 @@ export function createSlackApp(): SlackAppInstance {
                     : 'continue previous investigation from the saved session. Resume from the latest unresolved finding and next step.';
             }
 
+            // ── Phase 2: concurrent session limit ────────────────────────────
+            const accountId = cloudstickUser?.cloudstick_account_id ?? `slack:${user}`;
+            const planTier = cloudstickUser?.plan_tier ?? null;
+
+            if (!acquireSession(accountId, planTier)) {
+                await onReply('⚠️ You have reached the maximum number of concurrent sessions for your plan. Please wait for your current session to finish.');
+                return;
+            }
+
             const runLoop = () => runAgentLoop(
                 { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel },
                 onReply,
@@ -130,10 +140,14 @@ export function createSlackApp(): SlackAppInstance {
                 indicator
             );
 
-            if (cloudstickUser) {
-                await runWithCloudstickContext(cloudstickUser, runLoop);
-            } else {
-                await runLoop();
+            try {
+                if (cloudstickUser) {
+                    await runWithCloudstickContext(cloudstickUser, runLoop);
+                } else {
+                    await runLoop();
+                }
+            } finally {
+                releaseSession(accountId);
             }
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);

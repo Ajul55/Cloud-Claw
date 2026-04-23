@@ -1,0 +1,52 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Build output (rebuilt inside container)
+dist
+
+# Development files
+.git
+.gitignore
+.agents
+.aider*
+.claude
+.code-review-graph
+.codex
+.cursorrules
+.windsurfrules
+.mcp.json
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test files
+test-endpoints.ts
+test_servers.ts
+*.test.ts
+vitest.config.*
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (NEVER include in image)
+.env
+.env.*
+!.env.example
+keys/
+
+# Large files
+Insomnia_latest.yaml
+Insomnia_2026-03-17.yaml
+*.yaml:Zone.Identifier
+cloudstick_plain_english_plan.md*

@@ -52,6 +52,13 @@ export async function connectDB(): Promise<void> {
             await pool.query(`ALTER TABLE IF EXISTS fix_memory ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
             await pool.query(`CREATE INDEX IF NOT EXISTS idx_fix_memory_created ON fix_memory(created_at);`);
 
+            // Gateway migrations: ensure new columns exist on users
+            await pool.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS cloudstick_account_id TEXT UNIQUE;`);
+            await pool.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS slack_user_id TEXT UNIQUE;`);
+            await pool.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS slack_workspace_id TEXT;`);
+            await pool.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS plan_tier TEXT NOT NULL DEFAULT 'starter' CHECK (plan_tier IN ('starter', 'pro', 'business'));`);
+            await pool.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS plan_updated_at TIMESTAMPTZ;`);
+
             // Expire approvals that were left pending for over 10 minutes.
             await pool.query(`
                 UPDATE approval_queue

@@ -1,8 +1,16 @@
 /**
- * PM2 Cluster Configuration — Cloud-Claw
+ * PM2 Configuration — Cloud-Claw
  *
- * Runs 2 Node.js processes behind PM2's built-in load balancer.
- * Session state lives in PostgreSQL so any process can handle any request.
+ * Runs 1 Node.js process via PM2.
+ *
+ * WHY instances: 1 (not 2):
+ *   The HTTP gateway uses an in-memory SSE event bus (sessionBus Map in
+ *   src/interfaces/http_gateway.ts) and an in-memory session limiter
+ *   (src/services/session_limiter.ts). With 2 workers, a POST /api/chat
+ *   request may land on Worker 1 (creating the emitter there) while the
+ *   SSE GET /api/chat/:id/stream request lands on Worker 2 (where the
+ *   emitter doesn't exist), causing the stream to hang silently forever.
+ *   Keep at 1 until the event bus is moved to Redis pub/sub (Phase 5).
  *
  * Usage:
  *   pm2 start ecosystem.config.cjs --env production
@@ -14,8 +22,8 @@ module.exports = {
     apps: [{
         name: 'cloudclaw',
         script: 'dist/src/index.js',
-        instances: 2,              // 2 processes, not CPU count
-        exec_mode: 'cluster',      // share one port, load balance
+        instances: 1,              // 1 process — see comment above re: in-memory SSE bus
+        exec_mode: 'fork',         // fork mode; cluster with 1 instance adds no benefit
         max_restarts: 10,
         min_uptime: '10s',
         restart_delay: 3000,

@@ -775,13 +775,17 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             const usage = response.usage;
             if (usage) {
                 const calledTools = choice.message?.tool_calls?.map((t: any) => t.function.name).join(',') || undefined;
+                const accountId = message.sessionId.startsWith('cloudstick:')
+                    ? message.sessionId.slice('cloudstick:'.length)
+                    : undefined;
                 void trackUsage({
                     sessionId: message.sessionId,
                     model: activeModel,
                     tokensIn: usage.prompt_tokens,
                     tokensOut: usage.completion_tokens,
                     latencyMs: reqLatency,
-                    toolName: calledTools
+                    toolName: calledTools,
+                    accountId,
                 });
             }
         } catch (err: any) {

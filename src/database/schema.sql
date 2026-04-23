@@ -94,8 +94,11 @@ CREATE TABLE IF NOT EXISTS usage_log (
   cost_usd    NUMERIC(10,6) DEFAULT 0,
   latency_ms  INTEGER,
   tool_name   TEXT,
+  account_id  TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_usage_log_account_period
+    ON usage_log (account_id, created_at DESC);
 
 -- ─── Fix Memory (Semantic Vector Level 2) ───────────────────────────────────
 -- Stores past problems and solutions to bootstrap LLM debugging.
@@ -132,6 +135,12 @@ CREATE TABLE IF NOT EXISTS users (
   ssh_public_key        TEXT,
   setup_at              TIMESTAMPTZ,
   updated_at            TIMESTAMPTZ DEFAULT NOW(),
+  -- Gateway fields
+  cloudstick_account_id TEXT UNIQUE,
+  slack_user_id         TEXT UNIQUE,
+  slack_workspace_id    TEXT,
+  plan_tier             TEXT NOT NULL DEFAULT 'starter' CHECK (plan_tier IN ('starter', 'pro', 'business')),
+  plan_updated_at       TIMESTAMPTZ,
   UNIQUE (platform, platform_id)
 );
 

@@ -23,11 +23,12 @@ interface CloudstickApiServer {
 
 export async function getAllServers(): Promise<ServerNode[]> {
     const user = getCloudstickUser();
-    if (!user?.cloudstick_user_id) return [];
+    const effectiveUserId = user?.cloudstick_user_id ?? (await import('../config/env.js')).env.CLOUDSTICK_USER_ID;
+    if (!effectiveUserId) return [];
 
     try {
         const client = getCloudstickClient();
-        const response = await client.listServersByUser(user.cloudstick_user_id) as {
+        const response = await client.listServersByUser(effectiveUserId) as {
             message?: { servers?: CloudstickApiServer[] };
         };
         const servers = response?.message?.servers ?? [];
@@ -96,6 +97,9 @@ export async function getServerByIp(ip: string): Promise<ServerNode | null> {
 
 export async function getDefaultServer(): Promise<ServerNode> {
     const servers = await getAllServers();
+    if (servers.length === 0) {
+        throw new Error('No servers available in registry. Check Cloudstick API credentials.');
+    }
     return servers[0];
 }
 

@@ -10,11 +10,19 @@
 
 import http from 'http';
 import { getPool, isDBConfigured } from './database/db.js';
+import { handleDashboardRequest } from './dashboard/server.js';
 
 type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
 
 export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler): void {
     const server = http.createServer(async (req, res) => {
+        // Dashboard routes (/api/stats and /dashboard/*) take priority
+        const url = req.url ?? '/';
+        if (url === '/api/stats' || url.startsWith('/api/stats?') || url === '/dashboard' || url.startsWith('/dashboard/')) {
+            await handleDashboardRequest(req, res);
+            return;
+        }
+
         if (gatewayHandler && req.url?.startsWith('/api/')) {
             try {
                 await gatewayHandler(req, res);
@@ -69,6 +77,7 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
 
     server.listen(port, () => {
         console.log(`[health] Listening on :${port}/health`);
+        console.log(`[dashboard] Available at :${port}/dashboard`);
         if (gatewayHandler) console.log(`[health] Gateway mounted on :${port}/api/`);
     });
 

@@ -1,0 +1,67 @@
+# ─── Cloud-Claw Docker Compose ────────────────────────────────────────────────
+# Start:   docker compose up -d --build
+# Logs:    docker compose logs -f cloudclaw
+# Stop:    docker compose down
+# Reset:   docker compose down -v  (⚠ deletes database!)
+#
+# Pre-flight (run once before first start):
+#   mkdir -p ./keys          # required — Docker errors if this dir is missing
+#   cp .env.docker.example .env.docker && vi .env.docker
+
+services:
+  # ─── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cloudclaw-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cloudclaw
+      POSTGRES_USER: cloudclaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in your .env file}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Auto-run schema on first boot (Postgres runs .sql files in /docker-entrypoint-initdb.d/)
+      - ./src/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "5433:5432"   # Expose on 5433 so it doesn't conflict with local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudclaw -d cloudclaw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - cloudclaw-net
+
+  # ─── Cloud-Claw Agent ───────────────────────────────────────────────────────
+  cloudclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cloudclaw-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.docker
+    volumes:
+      # SSH keys — read-only bind mount (most secure method)
+      # Run: mkdir -p ./keys  before first docker compose up
+      # Without this directory Docker will error: "bind source path does not exist"
+      - ./keys:/app/keys:ro
+      # Temp directory for SSH CA signed certificates (needs write)
+      - cloudclaw-certs:/tmp/cloudclaw-certs
+    ports:
+      - "9000:9000"   # Health check endpoint
+    networks:
+      - cloudclaw-net
+
+volumes:
+  pgdata:
+    driver: local
+  cloudclaw-certs:
+    driver: local
+
+networks:
+  cloudclaw-net:
+    driver: bridge

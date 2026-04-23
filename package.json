@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "npm run build && node dist/src/index.js",
+    "build:dashboard": "cd dashboard && npm run build",
+    "start": "npm run build:dashboard && npm run build && node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "db:init": "psql $DATABASE_URL -f src/database/schema.sql"
   },

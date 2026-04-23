@@ -7,6 +7,7 @@ export interface UsageData {
     tokensOut: number;
     latencyMs: number;
     toolName?: string;
+    accountId?: string;
 }
 
 // Approximate cost in USD per 1,000,000 tokens
@@ -41,8 +42,8 @@ export async function trackUsage(data: UsageData): Promise<void> {
     try {
         const pool = getPool();
         await pool.query(
-            `INSERT INTO usage_log (session_id, model, tokens_in, tokens_out, cost_usd, latency_ms, tool_name)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            `INSERT INTO usage_log (session_id, model, tokens_in, tokens_out, cost_usd, latency_ms, tool_name, account_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [
                 data.sessionId,
                 data.model,
@@ -50,7 +51,8 @@ export async function trackUsage(data: UsageData): Promise<void> {
                 data.tokensOut,
                 costUsd,
                 data.latencyMs,
-                data.toolName ?? null
+                data.toolName ?? null,
+                data.accountId ?? null,
             ]
         );
     } catch (err) {

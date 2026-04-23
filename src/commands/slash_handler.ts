@@ -2,7 +2,7 @@ import { getPool, isDBConfigured, clearSession } from '../database/db.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { setGlobalLLMOverride, getCurrentLLMConfig } from '../llm/provider.js';
 import { runWithCloudstickContext } from '../api/cloudstick_context.js';
-import { setUserCloudstickCredentials, setUserSshKey, getUserByPlatformId } from '../services/user_service.js';
+import { setUserCloudstickCredentials, setUserSshKey, getUserByPlatformId, getUserBySlackUserId } from '../services/user_service.js';
 import { decodeCloudstickJwtUserId } from '../utils/crypto.js';
 import type { ReplyFn } from '../tools/types.js';
 import { formatServerTarget, getAllServers } from '../utils/server_registry.js';
@@ -338,8 +338,12 @@ async function handleNodes(
         return;
     }
 
-    // W5: Set per-user Cloudstick context so getAllServers() uses the right credentials
-    const user = await getUserByPlatformId(platform, userId);
+    // W5: Set per-user Cloudstick context so getAllServers() uses the right credentials.
+    // Cloudstick-linked users are keyed by slack_user_id (not platform+platform_id),
+    // so try that first; fall back to legacy per-pilot row for Telegram.
+    const user = platform === 'slack'
+        ? await getUserBySlackUserId(userId) ?? await getUserByPlatformId(platform, userId)
+        : await getUserByPlatformId(platform, userId);
 
     await runWithCloudstickContext(user, async () => {
         const rows = await getAllServers();
