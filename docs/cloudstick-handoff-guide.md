@@ -202,6 +202,16 @@ What we built is a solid **Version 1**. Here are the phases that would make it p
 
 ---
 
+### ⚠️ Pre-Launch Fix Required — PM2 Workers (Do This Before Going Live)
+
+**The problem:** Cloud-Claw currently runs as 2 Node.js workers on the same server sharing one port (PM2 cluster mode). The live-streaming system (SSE) stores each session's event channel in the worker's own memory. If a user's "send message" request lands on Worker 1 but their "receive stream" request lands on Worker 2, the stream hangs silently — Worker 2 has no channel for that session.
+
+**The fix (5 minutes):** In `ecosystem.config.cjs`, change `instances: 2` to `instances: 1` until the Redis upgrade (Phase 5) is done.
+
+**The permanent fix** is Phase 5 below (Redis pub/sub).
+
+---
+
 ### Phase 1 — What We Just Finished ✅
 
 - Private HTTP gateway with authentication
@@ -209,6 +219,7 @@ What we built is a solid **Version 1**. Here are the phases that would make it p
 - Auto user creation and plan tracking
 - Slack linking and shared sessions
 - Plan-tier speed limits
+- Security hardening: body size limit, session isolation, error scrubbing, bus timeout
 
 ---
 
@@ -251,15 +262,19 @@ What we built is a solid **Version 1**. Here are the phases that would make it p
 
 ---
 
-### Phase 5 — Horizontal Scaling (Running Multiple Copies)
+### Phase 5 — Horizontal Scaling + Job Queue (Running Multiple Copies)
 
-**What it is:** Right now Cloud-Claw runs as two Node.js workers sharing one database. If traffic grows large, you need to run more copies across multiple servers.
+**What it is:** Right now Cloud-Claw runs as a single Node.js worker. If traffic grows large, you need to run more copies across multiple servers. This phase also adds a proper job queue so in-progress diagnoses survive a server restart.
 
-**Why it matters:** A single machine has a ceiling. When Cloudstick has thousands of active users, one server will not be enough.
+**Why it matters:** A single machine has a ceiling. When Cloudstick has thousands of active users, one server will not be enough. Without a job queue, any server restart during a live diagnosis silently loses that session.
 
 **What needs to be built:**
-- Move the SSE event bus from in-process memory (what we use now) to a shared message queue (e.g. Redis pub/sub), so any Cloud-Claw worker can send events to any open stream
+- Add Redis to the infrastructure (one Redis instance serves both purposes below)
+- Move the SSE event bus from in-process memory to Redis pub/sub, so any Cloud-Claw worker can send events to any open stream — this also re-enables the 2-worker PM2 setup
+- Add BullMQ (runs on the same Redis) as a job queue: each chat session becomes a persisted job that survives restarts and retries failed LLM calls automatically
 - Ensure session locking works correctly when multiple workers handle requests for the same account
+
+**Note on job queues:** A queue is not needed now (Node.js async handles 20–50 concurrent sessions easily without one). The reason to add it alongside Redis is that BullMQ runs on Redis — once Redis is in, the queue comes at almost no extra cost and gives you crash recovery and retry logic for free.
 
 ---
 
@@ -278,10 +293,13 @@ What we built is a solid **Version 1**. Here are the phases that would make it p
 
 ### Priority Order
 
-| Phase | Effort | Priority |
-|---|---|---|
-| Phase 2 — Concurrent session limits | Small (1–2 days) | **Do this first** |
-| Phase 3 — Crash recovery / reconnect | Medium (2–3 days) | Do before launch |
-| Phase 4 — Usage tracking | Medium (2–3 days) | Needed for billing |
-| Phase 5 — Horizontal scaling | Large (1–2 weeks) | When user count grows |
-| Phase 6 — Monitoring | Medium (1 week) | Run alongside Phase 4–5 |
+| # | What | Effort | When |
+|---|---|---|---|
+| **Pre-launch** | Drop PM2 to 1 worker (`instances: 1` in ecosystem.config.cjs) | 5 minutes | **Right now — blocks streaming** |
+| Phase 2 | Concurrent session limits (429 when at cap) | 1–2 days | Before public launch |
+| Phase 3 | Crash recovery / SSE reconnect | 2–3 days | Before public launch |
+| Phase 4 | Usage tracking + billing report endpoint | 2–3 days | Needed for billing |
+| Phase 5 | Redis (SSE pub/sub + BullMQ job queue) + 2nd worker | 1–2 weeks | When user count grows beyond ~50 concurrent |
+| Phase 6 | Monitoring + alerts | 1 week | Run alongside Phase 4–5 |
+
+**Cost guidance (MiniMax 2.5, 20 servers troubleshooting daily):** Estimated $13–20/month in API costs. The biggest variable is how much log output the AI reads per session — large log files inflate input token counts quickly. Check `SELECT SUM(prompt_tokens), SUM(cost_usd) FROM usage_log` after the first week to get a real number.
