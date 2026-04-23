@@ -10,7 +10,7 @@ import { encrypt, decrypt } from '../utils/crypto.js';
 
 export interface CloudclawUser {
     id: number;
-    platform: 'slack' | 'telegram';
+    platform: 'slack' | 'telegram' | 'cloudstick';
     platform_id: string;
     cloudstick_api_key: string | null;
     cloudstick_api_secret: string | null;
@@ -19,6 +19,12 @@ export interface CloudclawUser {
     ssh_public_key: string | null;
     setup_at: Date | null;
     updated_at: Date;
+    // Cloudstick gateway fields (added by migration 004)
+    cloudstick_account_id: string | null;
+    plan_tier: string | null;
+    plan_updated_at: Date | null;
+    slack_user_id: string | null;
+    slack_workspace_id: string | null;
 }
 
 export async function getUserByPlatformId(
@@ -157,5 +163,54 @@ export function hasCloudstickCredentials(user: CloudclawUser): boolean {
         user.cloudstick_api_key &&
         user.cloudstick_api_secret &&
         user.cloudstick_user_id
+    );
+}
+
+export async function getUserByCloudstickAccountId(accountId: string): Promise<CloudclawUser | null> {
+    if (!isDBConfigured()) return null;
+    const pool = getPool();
+    const { rows } = await pool.query(
+        'SELECT * FROM users WHERE cloudstick_account_id = $1',
+        [accountId]
+    );
+    return (rows[0] as unknown as CloudclawUser) ?? null;
+}
+
+export async function upsertCloudstickUser(accountId: string, planTier: string): Promise<CloudclawUser> {
+    const pool = getPool();
+    const { rows } = await pool.query(`
+        INSERT INTO users (platform, platform_id, cloudstick_account_id, plan_tier, plan_updated_at)
+        VALUES ('cloudstick', $1, $1, $2, NOW())
+        ON CONFLICT (cloudstick_account_id) DO UPDATE SET
+            plan_tier = EXCLUDED.plan_tier,
+            plan_updated_at = CASE
+                WHEN users.plan_tier IS DISTINCT FROM EXCLUDED.plan_tier THEN NOW()
+                ELSE users.plan_updated_at
+            END
+        RETURNING *
+    `, [accountId, planTier]);
+    return rows[0] as unknown as CloudclawUser;
+}
+
+export async function getUserBySlackUserId(slackUserId: string): Promise<CloudclawUser | null> {
+    if (!isDBConfigured()) return null;
+    const pool = getPool();
+    const { rows } = await pool.query(
+        'SELECT * FROM users WHERE slack_user_id = $1',
+        [slackUserId]
+    );
+    return (rows[0] as unknown as CloudclawUser) ?? null;
+}
+
+export async function linkSlackToCloudstickUser(
+    cloudstickAccountId: string,
+    slackUserId: string,
+    slackWorkspaceId: string | null,
+): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+        `UPDATE users SET slack_user_id = $2, slack_workspace_id = $3
+         WHERE cloudstick_account_id = $1`,
+        [cloudstickAccountId, slackUserId, slackWorkspaceId]
     );
 }
