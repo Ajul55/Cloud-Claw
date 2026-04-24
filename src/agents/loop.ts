@@ -50,6 +50,7 @@ import { resumeApprovedSession } from '../hitl/resume.js';
 import { touchSession } from '../jobs/timeout_sessions.js';
 import type { StatusIndicator } from '../utils/status_indicator.js';
 import { trackUsage } from '../telemetry/usage_tracker.js';
+import { recordLlmSuccess, recordLlmFailure } from '../telemetry/llm_health.js';
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import {
     getAllServers,
@@ -821,6 +822,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             }
 
             choice = extractCompletionChoice(response);
+            recordLlmSuccess();
 
             // Handle usage tracking
             const usage = response.usage;
@@ -840,6 +842,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 });
             }
         } catch (err: any) {
+            recordLlmFailure();
             const msg = err instanceof Error ? err.message : String(err);
             console.error('[loop] LLM error:', msg);
             if (err.error?.failed_generation) {
