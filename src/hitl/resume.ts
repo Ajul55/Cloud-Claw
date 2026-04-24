@@ -5,12 +5,27 @@ import {
     getSession,
     upsertSession
 } from '../database/db.js';
-import { getToolByName } from '../tools/tool_registry.js';
+import { getToolByName, getAllTools } from '../tools/tool_registry.js';
 import { decodeToolApprovalCommand } from './tool_approval.js';
 import { runAgentLoop } from '../agents/loop.js';
 import { touchSession } from '../jobs/timeout_sessions.js';
 import { saveFix } from '../memory/fix_memory.js';
+import { checkCommand } from '../security/command_filter.js';
 import type { ReplyFn, ApprovalFn } from '../tools/types.js';
+
+// SSH tools whose `command` arg must be re-checked against the command blocklist on resume
+const SSH_COMMAND_TOOLS = new Set([
+    'execute_ssh_command', 'execute_ssh_write',
+]);
+
+// Lazily-built set of write tools (approvalTier === 3)
+let _WRITE_TOOLS: Set<string> | null = null;
+function getWriteToolsLocal(): Set<string> {
+    if (!_WRITE_TOOLS) {
+        _WRITE_TOOLS = new Set(getAllTools().filter(t => t.approvalTier === 3).map(t => t.name));
+    }
+    return _WRITE_TOOLS;
+}
 
 export function extractApprovedToolCall(
     messages: Array<Record<string, unknown>>,
@@ -81,6 +96,9 @@ export async function resumeApprovedSession(
     }
     touchSession(approval.session_id);
 
+    // HIGH-4 / MED-7: Track session version for OCC writes
+    let sessionVersion = session.version ?? 0;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const messages = (session.messages ?? []) as any[];
     const receipts: Record<string, any> = typeof session.receipts === 'object' && session.receipts
@@ -137,7 +155,9 @@ export async function resumeApprovedSession(
             messages: messages as unknown as Array<Record<string, unknown>>,
             receipts,
             iteration: session.iteration ?? 0,
+            expectedVersion: sessionVersion,
         });
+        sessionVersion++;
 
         await runAgentLoop(
             {
@@ -228,6 +248,42 @@ export async function resumeApprovedSession(
             console.log(`[resume] State hash matches — safe to proceed.`);
         } catch (err) {
             console.warn('[resume] getCurrentState re-check failed, proceeding cautiously:', err);
+        }
+    }
+
+    // HIGH-3: Re-validate the tool is still safe to execute before marking approved.
+    // (a) Re-fetch approval to guard against race conditions / revocation between
+    //     state-hash check and actual execution.
+    const freshApproval = await getApprovalById(approvalId);
+    if (!freshApproval || freshApproval.status !== 'pending') {
+        const currentStatus = freshApproval?.status ?? 'not found';
+        console.warn(`[resume] Approval ${approvalId} is no longer pending at execution time (status: ${currentStatus}).`);
+        await onReply(`⚠️ This approval is no longer actionable (status: ${currentStatus}). Please re-run the command if needed.`);
+        return;
+    }
+
+    // (b) Confirm the tool is a recognised write tool — reject unknown tools that
+    //     somehow passed earlier validation.
+    if (!getWriteToolsLocal().has(toolName)) {
+        console.warn(`[resume] Tool "${toolName}" is not in the WRITE_TOOLS set — refusing to execute via HITL resume.`);
+        await onReply(`⚠️ Tool "${toolName}" is not a recognised write tool and cannot be executed via the approval flow.`);
+        return;
+    }
+
+    // (c) For SSH command tools, re-run the command blocklist check so a malicious
+    //     command string cannot slip through if the blocklist was updated after
+    //     approval was requested.
+    if (SSH_COMMAND_TOOLS.has(toolName)) {
+        const cmdArg = (toolArgs as any).command;
+        if (typeof cmdArg === 'string') {
+            const isWriteTool = toolName === 'execute_ssh_write';
+            const cmdCheck = checkCommand(cmdArg, isWriteTool);
+            if (!cmdCheck.safe) {
+                console.warn(`[resume] Command blocklist blocked "${toolName}" at execution time: ${cmdCheck.reason}`);
+                await updateApprovalStatus(approvalId, 'rejected', pilotUserId);
+                await onReply(`🚫 Execution blocked by security filter: ${cmdCheck.reason}\n\nThis command was blocked at execution time. Please re-evaluate and request a new action.`);
+                return;
+            }
         }
     }
 
@@ -325,7 +381,9 @@ export async function resumeApprovedSession(
         messages: messages as unknown as Array<Record<string, unknown>>,
         receipts,
         iteration: (session.iteration ?? 0),
+        expectedVersion: sessionVersion,
     });
+    sessionVersion++;
 
     // 9. Re-enter agent loop to generate the final reply.
     //    Pass resumedTools so the hallucination detector knows this tool ran.

@@ -39,12 +39,9 @@ import { manageCloudflareDnsTool } from './manage_cloudflare_dns.js';
 import { manageWebsiteSettingsTool } from './manage_website_settings.js';
 // Phase 5: Cloudstick API Tools (endpoints pending confirmation from backend team)
 import { managePhpExtensionTool, changePhpCliVersionTool } from './cloudstick/php_tools.js';
-import { getFirewallStatusTool, manageBruteForceShieldTool, manageIpRuleTool, addTemporaryIpRuleTool, listTemporaryIpRulesTool } from './cloudstick/firewall_tools.js';
-import { manageServiceTool } from './cloudstick/service_tools.js';
 import { configureTimezoneTool, cleanupServerTool, getHostnameTool, runAutoUpdateTool } from './cloudstick/server_settings_tools.js';
-import { setMaintenanceModeTool, manageSslTool, addSubdomainTool, createWordPressSiteTool, createCustomPhpSiteTool } from './cloudstick/website_tools.js';
-import { enableWebmailTool, createEmailAccountTool } from './cloudstick/email_tools.js';
-import { uploadFileTool, createFileTool, createFolderTool, renameFileTool, moveFileTool, copyFileTool, changeFilePermissionsTool } from './cloudstick/file_manager_tools.js';
+import { setMaintenanceModeTool, manageSslTool } from './cloudstick/website_tools.js';
+import { createEmailAccountTool } from './cloudstick/email_tools.js';
 import {
     listServerSupervisorJobsTool,
     listWebsiteSupervisorJobsTool,
@@ -164,14 +161,6 @@ const ALL_TOOLS: Tool[] = [
     // PHP Management
     managePhpExtensionTool,
     changePhpCliVersionTool,
-    // Firewall & Security
-    getFirewallStatusTool,
-    manageBruteForceShieldTool,
-    manageIpRuleTool,
-    addTemporaryIpRuleTool,
-    listTemporaryIpRulesTool,
-    // Service Control
-    manageServiceTool,
     // Server Settings
     configureTimezoneTool,
     cleanupServerTool,
@@ -180,16 +169,8 @@ const ALL_TOOLS: Tool[] = [
     // Website Management
     setMaintenanceModeTool,
     manageSslTool,
-    addSubdomainTool,
-    createWordPressSiteTool,
-    createCustomPhpSiteTool,
     // Email Accounts
-    enableWebmailTool,
     createEmailAccountTool,
-    // File Manager
-    uploadFileTool,
-    createFileTool,
-    createFolderTool,
     // FTP Accounts
     createFtpAccountTool,
     // NGINX Config Manager
@@ -292,11 +273,6 @@ const ALL_TOOLS: Tool[] = [
     createManualDatabaseBackupTool,
     restoreWebsiteBackupTool,
     restoreDatabaseBackupTool,
-    // ── Tier 2: Extended File Operations ───────────────────────────────────
-    renameFileTool,
-    moveFileTool,
-    copyFileTool,
-    changeFilePermissionsTool,
 ];
 
 /** Map for O(1) lookup by name */

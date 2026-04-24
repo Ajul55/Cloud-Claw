@@ -49,7 +49,6 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
                 status: 'degraded',
                 db: 'not_configured',
                 uptime: process.uptime(),
-                pid: process.pid,
             }));
             return;
         }
@@ -61,7 +60,6 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
                 status: 'ok',
                 db: 'connected',
                 uptime: Math.round(process.uptime()),
-                pid: process.pid,
                 memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
             }));
         } catch {
@@ -70,7 +68,6 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
                 status: 'error',
                 db: 'disconnected',
                 uptime: Math.round(process.uptime()),
-                pid: process.pid,
             }));
         }
     });

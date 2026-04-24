@@ -120,9 +120,33 @@ const SENSITIVE_PATTERNS = [
 ];
 
 // ─── Tools suppressed after an API tool succeeds ────────────────────────────
-// Tracks tools that should be blocked because a prior tool already handled the job.
-// Keyed by sessionId, cleared on each fresh user message.
-const suppressedToolsMap = new Map<string, Set<string>>();
+// Stored in session receipts JSONB under the __suppressedTools key so state
+// persists across PM2 cluster workers and across HITL resume boundaries.
+// The key is intentionally prefixed with "__" so loadReceiptsFromSession()
+// ignores it (it fails the `typeof .toolName === 'string'` guard).
+
+const SUPPRESSED_TOOLS_KEY = '__suppressedTools';
+
+function loadSuppressedTools(raw: unknown): Set<string> {
+    if (raw && typeof raw === 'object') {
+        const entry = (raw as Record<string, unknown>)[SUPPRESSED_TOOLS_KEY];
+        if (Array.isArray(entry)) {
+            return new Set(entry.filter((v): v is string => typeof v === 'string'));
+        }
+    }
+    return new Set<string>();
+}
+
+function serializeWithSuppressedTools(
+    receipts: Map<string, ToolReceipt>,
+    suppressedTools: Set<string>
+): Record<string, unknown> {
+    const base: Record<string, unknown> = serializeReceipts(receipts);
+    if (suppressedTools.size > 0) {
+        base[SUPPRESSED_TOOLS_KEY] = [...suppressedTools];
+    }
+    return base;
+}
 
 
 // ─── Fix #9: encodeApprovalArgs — no double-encoding ─────────────────────────
@@ -320,9 +344,6 @@ async function _runAgentLoopCore(
     onApproval: ApprovalFn,
     indicator?: StatusIndicator
 ): Promise<void> {
-    // 0. Clear any suppressed-tools state from prior turns in this session
-    suppressedToolsMap.delete(message.sessionId);
-
     const sshCallLimit = SSH_CALL_LIMITS[message.planTier ?? 'pro'] ?? 30;
 
     // 1. Load or create session
@@ -410,14 +431,18 @@ async function _runAgentLoopCore(
     const isResume = (Array.isArray(message.resumedTools) && message.resumedTools.length > 0) || isFastPathApproval || isFastPathRejection;
 
     let executionReceipts: Map<string, ToolReceipt>;
+    let suppressedTools: Set<string>;
     let lastToolExecutionHost: string | null = null;
     if (message.text && !isResume) {
         // New user intent — start fresh, don't inherit receipts from previous conversation turns
         executionReceipts = new Map<string, ToolReceipt>();
+        suppressedTools = new Set<string>();
         clearTroubleshootingSession(message.sessionId);
         console.log('[loop] New user intent detected — cleared previous receipts and troubleshooting history');
     } else {
         executionReceipts = loadReceiptsFromSession(session?.receipts);
+        // Load suppressed tools from session JSONB so they persist across workers and HITL resume
+        suppressedTools = loadSuppressedTools(session?.receipts);
     }
 
     if (message.resumedTools) {
@@ -513,7 +538,7 @@ async function _runAgentLoopCore(
                 user_id: message.userId,
                 reply_target: message.replyTarget ?? session?.reply_target ?? null,
                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                receipts: serializeReceipts(executionReceipts),
+                receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                 iteration,
                 expectedVersion: sessionVersion,
             });
@@ -586,7 +611,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             user_id: message.userId,
             reply_target: message.replyTarget ?? session?.reply_target ?? null,
             messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-            receipts: serializeReceipts(executionReceipts),
+            receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
             iteration,
             expectedVersion: sessionVersion,
         });
@@ -745,7 +770,33 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             console.log(`[loop] Outgoing messages to API (trimmed from ${messages.length} to ${trimmedMessages.length})`);
 
-            let response = await openai.chat.completions.create({
+            const LLM_TIMEOUT_MS = 60_000;
+
+            // Helper: race the LLM call against a hard 60-second timeout.
+            // On timeout the abort signal fires; if the SDK propagates AbortError we
+            // re-throw a clear message so the existing catch block surfaces it to the user.
+            const callWithTimeout = async (
+                opts: Parameters<typeof openai.chat.completions.create>[0]
+            ): Promise<OpenAI.ChatCompletion> => {
+                const ctrl = new AbortController();
+                const handle = setTimeout(() => ctrl.abort(), LLM_TIMEOUT_MS);
+                try {
+                    return await openai.chat.completions.create(
+                        { ...opts, stream: false },
+                        { signal: ctrl.signal }
+                    ) as OpenAI.ChatCompletion;
+                } catch (err: unknown) {
+                    const name = (err as { name?: string }).name ?? '';
+                    if (name === 'AbortError' || ctrl.signal.aborted) {
+                        throw new Error('LLM call timed out after 60s');
+                    }
+                    throw err;
+                } finally {
+                    clearTimeout(handle);
+                }
+            };
+
+            let response = await callWithTimeout({
                 model: activeModel,
                 messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
                 tools: toolDefinitions,
@@ -759,7 +810,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             if (!Array.isArray((response as any).choices) || (response as any).choices.length === 0) {
                 console.warn('[loop] Provider returned empty choices — retrying once with tool_choice: auto');
                 await new Promise(res => setTimeout(res, 1500));
-                response = await openai.chat.completions.create({
+                response = await callWithTimeout({
                     model: activeModel,
                     messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
                     tools: toolDefinitions,
@@ -913,8 +964,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             }
 
             // ─── Suppression guard: block tools made redundant by a prior API tool ─
-            const suppressed = suppressedToolsMap.get(message.sessionId);
-            if (suppressed?.has(toolName)) {
+            if (suppressedTools.has(toolName)) {
                 console.warn(`[loop] SUPPRESSED: "${toolName}" is redundant after a prior API tool in this session`);
                 messages.push({
                     role: 'tool',
@@ -1045,8 +1095,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     try {
                         const stateSnapshot = await tool.getCurrentState(toolArgs);
                         const stateHash = createHash('sha256').update(stateSnapshot).digest('hex').slice(0, 16);
-                        // Embed in the command string so it survives serialisation
-                        toolApproval.command += `|__stateHash=${encodeURIComponent(stateHash)}`;
+                        // FIX: Embed stateHash inside args before encoding, not appended to command string.
+                        // Appending `|__stateHash=...` to the command string corrupted the decoder
+                        // because the legacy parser splits on `|` and misinterprets the hash as a key=value arg.
+                        const argsWithHash = { ...encodeApprovalArgs(toolArgs), __stateHash: stateHash };
+                        toolApproval.command = encodeToolApprovalCommand(toolName, argsWithHash);
                         console.log(`[loop] State hash captured for ${toolName}: ${stateHash}`);
                     } catch (err) {
                         console.warn(`[loop] getCurrentState failed for ${toolName}, skipping hash:`, err);
@@ -1060,7 +1113,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     user_id: message.userId,
                     reply_target: message.replyTarget ?? session?.reply_target ?? null,
                     messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                    receipts: serializeReceipts(executionReceipts),
+                    receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                     iteration,
                     expectedVersion: sessionVersion,
                 });
@@ -1105,7 +1158,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     user_id: message.userId,
                     reply_target: message.replyTarget ?? session?.reply_target ?? null,
                     messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                    receipts: serializeReceipts(executionReceipts),
+                    receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                     iteration,
                     expectedVersion: sessionVersion,
                 });
@@ -1155,7 +1208,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         user_id: message.userId,
                         reply_target: message.replyTarget ?? session?.reply_target ?? null,
                         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                        receipts: serializeReceipts(executionReceipts),
+                        receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                         iteration,
                         expectedVersion: sessionVersion,
                     });
@@ -1201,7 +1254,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         user_id: message.userId,
                         reply_target: message.replyTarget ?? session?.reply_target ?? null,
                         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                        receipts: serializeReceipts(executionReceipts),
+                        receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                         iteration,
                         expectedVersion: sessionVersion,
                     });
@@ -1291,12 +1344,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 }
 
                 // ─── Register suppressed tools after successful API tool ───────────
+                // Stored in the session-local suppressedTools Set (persisted to JSONB via
+                // serializeWithSuppressedTools) so it survives PM2 worker restarts and HITL resume.
                 if (result.success && tool.suppressTools) {
-                    if (!suppressedToolsMap.has(message.sessionId)) {
-                        suppressedToolsMap.set(message.sessionId, new Set());
-                    }
                     for (const suppressed of tool.suppressTools) {
-                        suppressedToolsMap.get(message.sessionId)!.add(suppressed);
+                        suppressedTools.add(suppressed);
                         console.log(`[loop] Suppressing redundant tool: ${suppressed} (suppressed by ${toolName})`);
                     }
                 }
@@ -1433,7 +1485,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                                 user_id: message.userId,
                                 reply_target: message.replyTarget ?? session?.reply_target ?? null,
                                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                                receipts: serializeReceipts(executionReceipts),
+                                receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                                 iteration,
                                 expectedVersion: sessionVersion,
                             });
@@ -1483,7 +1535,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                                 user_id: message.userId,
                                 reply_target: message.replyTarget ?? session?.reply_target ?? null,
                                 messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                                receipts: serializeReceipts(executionReceipts),
+                                receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
                                 iteration,
                                 expectedVersion: sessionVersion,
                             });
@@ -1580,15 +1632,28 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
     }
 
     // 5. Persist session
+    // FIX: Re-read current version before final persist.
+    // After up to 15 iterations the sessionVersion captured at loop start is stale —
+    // the final persist would silently fail the OCC check and lose the entire session state.
+    let finalVersion = sessionVersion;
+    if (iteration > 0) {
+        try {
+            const currentSession = await getSession(message.sessionId);
+            finalVersion = currentSession?.version ?? sessionVersion;
+        } catch {
+            // Non-fatal — fall back to original version
+        }
+    }
+
     await upsertSession({
         id: message.sessionId,
         channel: message.channel,
         user_id: message.userId,
         reply_target: message.replyTarget ?? session?.reply_target ?? null,
         messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-        receipts: serializeReceipts(executionReceipts),
+        receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
         iteration,
-        expectedVersion: sessionVersion,
+        expectedVersion: finalVersion,
     });
 
     // Note: HITL resume path is implemented in src/hitl/resume.ts.

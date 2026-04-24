@@ -86,8 +86,28 @@ function readBody(req: http.IncomingMessage): Promise<string> {
     });
 }
 
+// ── Security headers applied to every JSON response ──────────────────────────
+const SECURITY_HEADERS: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'Cache-Control': 'no-store',
+};
+
+function getCorsHeaders(): Record<string, string> {
+    const origin = env.CORS_ORIGIN;
+    if (!origin) return {};
+    return {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Cloudstick-Account-Id, X-Cloudstick-Plan, X-Cloudclaw-Key',
+        'Access-Control-Max-Age': '86400',
+    };
+}
+
 function json(res: http.ServerResponse, status: number, body: object): void {
-    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.writeHead(status, { ...SECURITY_HEADERS, ...getCorsHeaders() });
     res.end(JSON.stringify(body));
 }
 
@@ -171,6 +191,7 @@ function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessi
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
+        ...getCorsHeaders(),
     });
     res.write(':ok\n\n');
 
@@ -207,6 +228,19 @@ function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessi
 async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
     const accountId = req.headers['x-cloudstick-account-id'] as string | undefined;
 
+    // SECURITY: Require accountId header — empty string is not a valid tenant identity
+    if (!accountId) {
+        return json(res, 401, { error: 'Missing header: X-Cloudstick-Account-Id' });
+    }
+
+    // SECURITY: Verify the caller owns this session.
+    // Sessions for the HTTP gateway are always keyed as "cloudstick:{accountId}".
+    // Reject any attempt to approve/reject a session belonging to a different tenant.
+    const expectedSessionId = `cloudstick:${accountId}`;
+    if (sessionId !== expectedSessionId) {
+        return json(res, 403, { error: 'Forbidden' });
+    }
+
     let parsed: { approvalId?: unknown; decision?: unknown; reason?: unknown };
     try { parsed = JSON.parse(await readBody(req)); }
     catch { return json(res, 400, { error: 'Invalid JSON body' }); }
@@ -223,7 +257,7 @@ async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse
     await resumeApprovedSession(
         approvalId,
         decision === 'approve',
-        accountId ?? '',
+        accountId,
         onReply,
         onApproval,
         typeof reason === 'string' ? reason : undefined,
@@ -318,6 +352,18 @@ async function handleGetUsage(req: http.IncomingMessage, res: http.ServerRespons
 
 export function createGatewayHandler(): (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> {
     return async (req, res) => {
+        // ── CORS preflight ────────────────────────────────────────────────────
+        if (req.method === 'OPTIONS') {
+            const cors = getCorsHeaders();
+            if (Object.keys(cors).length > 0) {
+                res.writeHead(204, cors);
+            } else {
+                res.writeHead(204);
+            }
+            res.end();
+            return;
+        }
+
         if (req.headers['x-cloudclaw-key'] !== env.CLOUDSTICK_GATEWAY_KEY) {
             return json(res, 401, { error: 'Unauthorized' });
         }
@@ -331,7 +377,17 @@ export function createGatewayHandler(): (req: http.IncomingMessage, res: http.Se
 
         const streamMatch = url.match(/^\/api\/chat\/([^/]+)\/stream$/);
         if (method === 'GET' && streamMatch) {
-            return handleStream(req, res, decodeURIComponent(streamMatch[1]));
+            const streamSessionId = decodeURIComponent(streamMatch[1]);
+            const streamAccountId = req.headers['x-cloudstick-account-id'] as string | undefined;
+            // SECURITY: Require accountId header and verify session ownership before
+            // allowing any caller to subscribe to an SSE stream.
+            if (!streamAccountId) {
+                return json(res, 401, { error: 'Missing header: X-Cloudstick-Account-Id' });
+            }
+            if (streamSessionId !== `cloudstick:${streamAccountId}`) {
+                return json(res, 403, { error: 'Forbidden' });
+            }
+            return handleStream(req, res, streamSessionId);
         }
 
         const approveMatch = url.match(/^\/api\/chat\/([^/]+)\/approve$/);

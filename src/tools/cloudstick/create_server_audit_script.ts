@@ -6,7 +6,7 @@
  * This is a Tier 3 tool (HITL required).
  */
 
-import { getCloudstickClient } from '../../api/cloudstick_client.js';
+
 import { getCloudstickUser } from '../../api/cloudstick_context.js';
 import { env } from '../../config/env.js';
 import { sshExec } from '../../utils/ssh.js';
@@ -112,17 +112,11 @@ const createServerAuditScriptTool: Tool = {
             // Step 1: Resolve server to get SSH details
             const server = await resolveServerArg({ server_label: serverLabel, server_id: serverId });
 
-            // Step 2: Upload script via Cloudstick API (base64 encoded)
-            const client = getCloudstickClient();
+            // Step 2: Upload script via SSH using base64 decoding to avoid quoting issues
             const base64Content = Buffer.from(AUDIT_SCRIPT_CONTENT, 'utf8').toString('base64');
-            const uploadResult = await client.uploadFile(serverId, userId(), {
-                destination_path: destinationPath,
-                file_content: base64Content,
-                file_name: fileName,
-            });
-
-            // Step 3: Set +x via SSH
-            const chmodResult = await sshExec(server.ip, `chmod +x ${scriptPath}`, {
+            const sshCommand = `echo "${base64Content}" | base64 -d | sudo tee "${scriptPath}" > /dev/null && sudo chmod +x "${scriptPath}"`;
+            
+            const sshResult = await sshExec(server.ip, sshCommand, {
                 user: server.sshUser,
                 port: server.sshPort,
             });
@@ -130,8 +124,7 @@ const createServerAuditScriptTool: Tool = {
             return {
                 success: true,
                 output: `Server audit script created at ${scriptPath} and set executable.\n` +
-                    `Upload result: ${JSON.stringify(uploadResult)}\n` +
-                    `Permissions: ${chmodResult}`,
+                    `Permissions: ${sshResult}`,
             };
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

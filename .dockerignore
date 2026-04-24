@@ -26,8 +26,8 @@ docs/
 !README.md
 
 # Test files
-test-endpoints.ts
-test_servers.ts
+test_*.ts
+test-*.ts
 *.test.ts
 vitest.config.*
 
@@ -43,10 +43,10 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+!.env.docker.example
 keys/
 
-# Large files
-Insomnia_latest.yaml
-Insomnia_2026-03-17.yaml
-*.yaml:Zone.Identifier
-cloudstick_plain_english_plan.md*
+# Data
+data/
+session_*.json
+last_session.txt

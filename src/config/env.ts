@@ -56,10 +56,22 @@ const EnvSchema = z.object({
     SSH_PORT: z.coerce.number().int().positive().default(22),
 
     // Hub-level encryption key for SSH private keys at rest (32-byte hex = 64 chars)
-    ENCRYPTION_KEY: z.string().optional(),
+    // FIX: Validate format at parse time. Still optional (app boots without it) but
+    // a clear startup warning is logged so /setup doesn't silently crash at runtime.
+    ENCRYPTION_KEY: z.preprocess(
+        (val) => {
+            if (val === '' || val === undefined) return undefined;
+            return val;
+        },
+        z.string().regex(/^[0-9a-fA-F]{64}$/, 'Must be 64 hex characters (32 bytes)').optional()
+    ),
 
     // Cloudstick gateway shared secret — 64-char hex
     CLOUDSTICK_GATEWAY_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().regex(/^[0-9a-f]{64}$/).optional()),
+
+    // CORS: allowed origin for the HTTP gateway (e.g. https://app.cloudstick.io)
+    // Set to '*' during development. Omit or leave empty to deny all cross-origin requests.
+    CORS_ORIGIN: z.preprocess((val) => val === '' ? undefined : val, z.string().optional()),
 });
 
 function loadEnv() {
@@ -76,3 +88,9 @@ function loadEnv() {
 
 export const env = loadEnv();
 export type Env = typeof env;
+
+// FIX: Surface missing ENCRYPTION_KEY at boot instead of crashing on first /setup
+if (!env.ENCRYPTION_KEY) {
+    console.warn('[Config] ⚠️  ENCRYPTION_KEY is not set — /setup and credential storage will fail at runtime.');
+    console.warn('[Config]    Generate one: openssl rand -hex 32');
+}

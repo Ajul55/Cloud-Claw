@@ -90,15 +90,36 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
 
     try {
         const { client: openai, model: activeModel } = getLLMClient();
-        const response = await openai.chat.completions.create({
-            model: activeModel,
-            messages: [
-                { role: 'system', content: INTENT_CLASSIFIER_PROMPT },
-                { role: 'user', content: messageText }
-            ],
-            temperature: 0,
-            response_format: { type: 'json_object' }
-        });
+
+        // H5 fix: 10s timeout circuit breaker — slow/hanging provider falls back to heuristics
+        const INTENT_TIMEOUT_MS = 10_000;
+        const ctrl = new AbortController();
+        const timeoutHandle = setTimeout(() => ctrl.abort(), INTENT_TIMEOUT_MS);
+
+        let response;
+        try {
+            response = await openai.chat.completions.create(
+                {
+                    model: activeModel,
+                    messages: [
+                        { role: 'system', content: INTENT_CLASSIFIER_PROMPT },
+                        { role: 'user', content: messageText }
+                    ],
+                    temperature: 0,
+                    response_format: { type: 'json_object' },
+                },
+                { signal: ctrl.signal }
+            );
+        } catch (timeoutErr: unknown) {
+            const name = (timeoutErr as { name?: string }).name ?? '';
+            if (name === 'AbortError' || ctrl.signal.aborted) {
+                console.warn('[IntentClassifier] LLM call timed out after 10s — falling back to heuristics');
+                throw new Error('Intent classifier timed out');
+            }
+            throw timeoutErr;
+        } finally {
+            clearTimeout(timeoutHandle);
+        }
 
         const rawContent = response.choices[0]?.message?.content?.trim();
         if (rawContent) {

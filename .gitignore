@@ -1,14 +1,24 @@
 .env
-.env.example
 .env.docker
 node_modules/
 dist/
 keys/
 .aider*
 .mcp.json
-insomnia_latest.yaml
-insomnia_2026-03-17.yaml    
-insomnia_2026-03-17.yaml:Zone.Identifier
+.claude/
+.agents/
+.code-review-graph/
 .worktrees/
-test_server.ts
-test-endpoint.ts
+
+# Test scripts
+test_*.ts
+test-*.ts
+*.test.ts
+
+# Logs
+session_*.json
+*.log
+last_session.txt
+
+# DB
+data/

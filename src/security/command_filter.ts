@@ -158,9 +158,12 @@ export function checkCommand(command: string, isWriteTool: boolean = false): Fil
     }
 
     // Special case limitation for 'tail' length to prevent OOM
-    if (trimmed.includes('tail ') && trimmed.includes('-n ')) {
-        const match = trimmed.match(/tail\s+.*-n\s*(\d+)/i);
-        if (match && parseInt(match[1], 10) > 200) {
+    // FIX: Also check long-form `--lines` flag which bypassed the `-n` check
+    if (trimmed.includes('tail ')) {
+        const shortMatch = trimmed.match(/tail\s+.*-n\s*(\d+)/i);
+        const longMatch = trimmed.match(/tail\s+.*--lines[= ]\s*(\d+)/i);
+        const lineCount = shortMatch ? parseInt(shortMatch[1], 10) : (longMatch ? parseInt(longMatch[1], 10) : 0);
+        if (lineCount > 200) {
             return { safe: false, reason: '🚫 BLOCKED: tail command exceeds maximum 200 lines limit' };
         }
     }

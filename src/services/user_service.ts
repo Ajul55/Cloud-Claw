@@ -31,6 +31,7 @@ export async function getUserByPlatformId(
     platform: string,
     platformId: string
 ): Promise<CloudclawUser | null> {
+    if (!isDBConfigured()) return null;
     const pool = getPool();
     const { rows } = await pool.query(
         'SELECT * FROM users WHERE platform = $1 AND platform_id = $2',
@@ -67,7 +68,7 @@ export async function upsertUser(
         }
         if (data.ssh_private_key !== undefined) {
             fields.push(`ssh_private_key = $${idx++}`);
-            values.push(data.ssh_private_key);
+            values.push(data.ssh_private_key ? encrypt(data.ssh_private_key) : null);
         }
         if (data.ssh_public_key !== undefined) {
             fields.push(`ssh_public_key = $${idx++}`);
@@ -98,7 +99,7 @@ export async function upsertUser(
                 data.cloudstick_api_key ? encrypt(data.cloudstick_api_key) : null,
                 data.cloudstick_api_secret ? encrypt(data.cloudstick_api_secret) : null,
                 data.cloudstick_user_id ?? null,
-                data.ssh_private_key ?? null,
+                data.ssh_private_key ? encrypt(data.ssh_private_key) : null,
                 data.ssh_public_key ?? null,
                 data.setup_at ?? null,
             ]
@@ -129,7 +130,7 @@ export async function setUserSshKey(
     publicKey: string
 ): Promise<void> {
     await upsertUser(platform, platformId, {
-        ssh_private_key: encrypt(privateKey),
+        ssh_private_key: privateKey,
         ssh_public_key: publicKey,
     });
 }
@@ -149,12 +150,7 @@ export function getDecryptedCloudstickCredentials(user: CloudclawUser): {
             apiSecret: user.cloudstick_api_secret ? decrypt(user.cloudstick_api_secret) : null,
         };
     } catch (err) {
-        // Pre-migration plaintext fallback — value will be re-encrypted on next /setup
-        console.warn('[user_service] Failed to decrypt Cloudstick credentials — returning plaintext fallback. Run migration script if this persists after deployment.', err);
-        return {
-            apiKey: user.cloudstick_api_key,
-            apiSecret: user.cloudstick_api_secret,
-        };
+        throw new Error('[user_service] Failed to decrypt credentials — check ENCRYPTION_KEY');
     }
 }
 

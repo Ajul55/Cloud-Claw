@@ -3,6 +3,31 @@ import { env } from '../config/env.js';
 import { getCloudstickUser } from './cloudstick_context.js';
 import { getDecryptedCloudstickCredentials } from '../services/user_service.js';
 
+const SENSITIVE_KEYS = /^(authorization|apikey|apisecret|password|token|secret|key)$/i;
+
+function sanitizeErrorData(data: unknown): unknown {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+        return data;
+    }
+    return Object.fromEntries(
+        Object.entries(data as Record<string, unknown>).map(([k, v]) =>
+            SENSITIVE_KEYS.test(k) ? [k, '[REDACTED]'] : [k, v]
+        )
+    );
+}
+
+function safeLogUrl(url: string | undefined): string {
+    if (!url) return '';
+    try {
+        const u = new URL(url, 'https://placeholder.invalid');
+        return u.origin === 'https://placeholder.invalid'
+            ? url.split('?')[0]
+            : `${u.origin}${u.pathname}`;
+    } catch {
+        return url.split('?')[0];
+    }
+}
+
 export interface CloudstickClientOptions {
     apiKey?: string;
     apiSecret?: string;
@@ -61,9 +86,16 @@ export class CloudstickApiClient {
             });
             return response.data;
         } catch (error: any) {
-             if (error.response) {
-                console.error(`[Cloudstick API] Request failed: ${config.method} ${config.url}`, error.response.data);
-                throw new Error(JSON.stringify(error.response.data));
+            if (error.response) {
+                const safeData = sanitizeErrorData(error.response.data);
+                const safeUrl = safeLogUrl(config.url);
+                console.error(
+                    `[Cloudstick API] Request failed: ${config.method} ${safeUrl}`,
+                    { status: error.response.status, statusText: error.response.statusText, data: safeData }
+                );
+                throw new Error(
+                    `Cloudstick API error ${error.response.status}: ${error.response.statusText}`
+                );
             }
             throw error;
         }
@@ -109,7 +141,8 @@ export class CloudstickApiClient {
 
     /** Reboot a server */
     public async rebootServer(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/reboot/servers/${serverId}/users/${userId}` });
+        // FIX: Use POST for mutation — GET is an anti-pattern (triggers on prefetch/crawlers)
+        return this.request({ method: 'POST', url: `/reboot/servers/${serverId}/users/${userId}` });
     }
 
     /** Change PHP version at website level */
@@ -1105,40 +1138,6 @@ export class CloudstickApiClient {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 16. Firewall & Security — TODO: confirm Cloudstick endpoint
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Get firewall status */
-    // TODO: confirm Cloudstick endpoint
-    public async getFirewallStatus(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/firewall/status/servers/${serverId}/users/${userId}` });
-    }
-
-    /** Manage brute force shield */
-    // TODO: confirm Cloudstick endpoint
-    public async manageBruteForceShield(serverId: string, userId: string, action: string) {
-        return this.request({ method: 'POST', url: `/firewall/bruteforce/${action}/servers/${serverId}/users/${userId}` });
-    }
-
-    /** Manage IP rule (whitelist, block, unblock, etc.) */
-    // TODO: confirm Cloudstick endpoint
-    public async manageIpRule(serverId: string, userId: string, data: { ip: string; action: string }) {
-        return this.request({ method: 'POST', url: `/firewall/ip-rule/servers/${serverId}/users/${userId}`, data });
-    }
-
-    /** Add temporary IP rule */
-    // TODO: confirm Cloudstick endpoint
-    public async addTemporaryIpRule(serverId: string, userId: string, data: { ip: string; action: string; duration: string }) {
-        return this.request({ method: 'POST', url: `/firewall/temp-rule/servers/${serverId}/users/${userId}`, data });
-    }
-
-    /** List temporary IP rules */
-    // TODO: confirm Cloudstick endpoint
-    public async listTemporaryIpRules(serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/firewall/temp-rules/servers/${serverId}/users/${userId}` });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // 17. PHP Extensions & CLI — TODO: confirm Cloudstick endpoint
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1155,27 +1154,10 @@ export class CloudstickApiClient {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 18. Service Control — TODO: confirm Cloudstick endpoint
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Manage system service (start/stop/restart/status) */
-    // TODO: confirm Cloudstick endpoint
-    public async manageService(serverId: string, userId: string, data: { service: string; action: string; port?: number }) {
-        return this.request({ method: 'POST', url: `/service/${data.action}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    /** Get service status */
-    // TODO: confirm Cloudstick endpoint
-    public async getServiceStatus(serverId: string, userId: string, service: string) {
-        return this.request({ method: 'GET', url: `/service/status/${service}/servers/${serverId}/users/${userId}` });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // 19. Server Settings — timezone, cleanup, hostname, auto-update
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Configure server timezone */
-    // TODO: confirm Cloudstick endpoint
+    /** Configure server timezone (confirmed) */
     public async configureTimezone(serverId: string, userId: string, data: { timezone: string }) {
         return this.request({ method: 'PATCH', url: `/timezone/servers/${serverId}/users/${userId}`, data });
     }
@@ -1212,12 +1194,6 @@ export class CloudstickApiClient {
         return this.request({ method: 'PATCH', url: `/maintenance/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
 
-    /** Add subdomain to a website */
-    // TODO: confirm Cloudstick endpoint — subdomains use WebSocket per app type in Insomnia
-    public async addSubdomain(websiteId: string, serverId: string, userId: string, data: { subdomain: string }) {
-        return this.request({ method: 'POST', url: `/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
     /** Renew free SSL certificate (confirmed: POST /ssl/free-certificate/renew/websites/{w}/servers/{s}/users/{u}) */
     public async renewFreeSSL(websiteId: string, serverId: string, userId: string) {
         return this.request({ method: 'POST', url: `/ssl/free-certificate/renew/websites/${websiteId}/servers/${serverId}/users/${userId}` });
@@ -1226,67 +1202,6 @@ export class CloudstickApiClient {
     /** Revoke/remove SSL (alias for deleteSSL, included for semantic clarity) */
     public async revokeSSL(websiteId: string, serverId: string, userId: string) {
         return this.deleteSSL(websiteId, serverId, userId);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 21. WordPress Site Creation — TODO: confirm REST vs WebSocket
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Create a WordPress site (Insomnia shows WebSocket; trying REST POST fallback) */
-    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/wordpress/servers/{s}/users/{u}
-    public async createWordPressSite(serverId: string, userId: string, data: {
-        email: string; website_name: string; domain: string; site_title: string;
-        admin_username: string; admin_password: string; admin_email: string;
-        php_version: string; web_app_server: string; account_label?: string;
-    }) {
-        return this.request({ method: 'POST', url: `/wordpress/servers/${serverId}/users/${userId}`, data });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 22. Custom PHP Site Creation — TODO: confirm REST vs WebSocket
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Create a custom PHP site (Insomnia shows WebSocket; trying REST POST fallback) */
-    // TODO: confirm Cloudstick endpoint — Insomnia uses ws://*/customphp/servers/{s}/users/{u}
-    public async createCustomPhpSite(serverId: string, userId: string, data: {
-        email: string; website_name: string; domain_type: string; domain_name: string;
-        php_version: string; web_app_server: string;
-        clickjacking_protection?: boolean; xss_protection?: boolean; mime_sniffing_protection?: boolean;
-        account_label?: string;
-    }) {
-        return this.request({ method: 'POST', url: `/customphp/servers/${serverId}/users/${userId}`, data });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 23. Webmail — confirmed from Insomnia
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Enable webmail (Roundcube) for a website */
-    // TODO: confirm REST endpoint — Insomnia uses ws://*/roundcubewebmail/subdomain/websites/{w}/servers/{s}/users/{u}
-    public async enableWebmail(websiteId: string, serverId: string, userId: string, data?: { account_label?: string }) {
-        return this.request({ method: 'POST', url: `/roundcubewebmail/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 24. File Manager — TODO: confirm Cloudstick endpoint
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Upload a file to the server */
-    // TODO: confirm Cloudstick endpoint
-    public async uploadFile(serverId: string, userId: string, data: { destination_path: string; file_content: string; file_name: string }) {
-        return this.request({ method: 'POST', url: `/filemanager/upload/servers/${serverId}/users/${userId}`, data });
-    }
-
-    /** Create an empty file */
-    // TODO: confirm Cloudstick endpoint
-    public async createFile(serverId: string, userId: string, data: { path: string; file_name: string }) {
-        return this.request({ method: 'POST', url: `/filemanager/create-file/servers/${serverId}/users/${userId}`, data });
-    }
-
-    /** Create a folder */
-    // TODO: confirm Cloudstick endpoint
-    public async createFolder(serverId: string, userId: string, data: { path: string; folder_name: string }) {
-        return this.request({ method: 'POST', url: `/filemanager/create-folder/servers/${serverId}/users/${userId}`, data });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

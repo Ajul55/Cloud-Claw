@@ -18,6 +18,20 @@ import { startSentinel } from './sentinel/scheduler.js';
 import { startHealthServer } from './health.js';
 import { createGatewayHandler } from './interfaces/http_gateway.js';
 
+// ─── FIX: Global crash handlers ─────────────────────────────────────────────
+// Without these, unhandled rejections and uncaught exceptions kill PM2 workers
+// silently with no diagnostic output — making production outages undebuggable.
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] uncaughtException — process will exit:', err);
+    // Flush logs then exit non-zero so PM2 restarts the worker
+    setTimeout(() => process.exit(1), 500);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] unhandledRejection:', reason);
+    // Don't exit on unhandled rejection — log it and continue.
+    // This is safer in production than crashing the worker.
+});
+
 async function main(): Promise<void> {
     console.log('');
     console.log('╔══════════════════════════════════════╗');

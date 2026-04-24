@@ -36,12 +36,14 @@ export function createSlackApp(): SlackAppInstance {
     });
     slackAppRef = app;
 
-    // Aggressive global logger cache for debugging Slack event routing
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    app.use(async ({ payload, next }: any) => {
-        console.log(`[Slack-DIAGNOSTIC] Raw Event Inbound:`, JSON.stringify(payload).slice(0, 300));
-        await next();
-    });
+    // Diagnostic middleware — only enabled in development to avoid flooding production logs
+    if (process.env.NODE_ENV === 'development') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        app.use(async ({ payload, next }: any) => {
+            console.log(`[Slack-DIAGNOSTIC] Raw Event Inbound:`, JSON.stringify(payload).slice(0, 300));
+            await next();
+        });
+    }
 
     // ─── Shared Message Handler ───────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

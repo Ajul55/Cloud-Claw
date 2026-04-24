@@ -26,9 +26,10 @@ export function sanitizeToolOutput(output: string): { output: string; masked: bo
         /<minimax:tool_call>/i,
         /functions\.execute_ssh_command/i,
         /you are now a different ai/i,
-        /\bcurl\b.*\|\s*(bash|sh)\b/i,
-        /\bwget\b.*-[qO].*\|\s*(bash|sh)\b/i,
-        /\bbase64\s+-d\s*\|\s*(bash|sh)/i,
+        // H6 fix: `s` (dotAll) flag so newlines between curl/wget and `| bash` don't bypass detection
+        /\bcurl\b[\s\S]*?\|\s*(bash|sh)\b/is,
+        /\bwget\b[\s\S]*?-[qO][\s\S]*?\|\s*(bash|sh)\b/is,
+        /\bbase64\s+-d[\s\S]*?\|\s*(bash|sh)/is,
     ];
 
     for (const pattern of injectionPatterns) {

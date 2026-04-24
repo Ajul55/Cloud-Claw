@@ -1,7 +1,5 @@
 /**
  * Email Account Tools — Cloudstick API
- *
- * - enable_webmail (Tier 3)
  * - create_email_account (Tier 3)
  */
 
@@ -14,49 +12,6 @@ import { encodeToolApprovalCommand } from '../../hitl/tool_approval.js';
 const userId = () => getCloudstickUser()?.cloudstick_user_id
     ?? env.CLOUDSTICK_USER_ID
     ?? (() => { throw new Error('CLOUDSTICK_USER_ID is not set'); })();
-
-// ─── Enable Webmail (Tier 3) ────────────────────────────────────────────────
-
-export const enableWebmailTool: Tool = {
-    name: 'enable_webmail',
-    description:
-        'Enable webmail (Roundcube) for a domain via the Cloudstick API. Requires HITL approval.',
-    parameters: {
-        type: 'object',
-        properties: {
-            website_id: { type: 'string', description: 'Cloudstick website ID for the domain' },
-            server_id: { type: 'string', description: 'Cloudstick server ID' },
-            server_label: { type: 'string', description: 'Human-readable server label' },
-            cloudflare_account: { type: 'string', description: 'Cloudflare account label/selector' },
-        },
-        required: ['website_id', 'server_id'],
-    },
-    approvalTier: 3,
-    getRationale: (args) =>
-        `This will enable webmail (Roundcube) for website ${args.website_id} on server ${args.server_label ?? args.server_id}.`,
-    getApprovalRequest: (args) => ({
-        command: encodeToolApprovalCommand('enable_webmail', {
-            website_id: String(args.website_id),
-            server_id: String(args.server_id),
-        }),
-        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
-        rationale: `Enable webmail (Roundcube) for website ${args.website_id}.`,
-    }),
-    execute: async (args) => {
-        try {
-            const client = getCloudstickClient();
-            const data = args.cloudflare_account
-                ? { account_label: String(args.cloudflare_account) }
-                : undefined;
-            const result = await client.enableWebmail(
-                String(args.website_id), String(args.server_id), userId(), data
-            );
-            return { success: true, output: `Webmail enabled.\n${JSON.stringify(result, null, 2)}` };
-        } catch (err) {
-            return { success: false, output: `Webmail enablement failed: ${err instanceof Error ? err.message : String(err)}` };
-        }
-    },
-};
 
 // ─── Create Email Account (Tier 3) ──────────────────────────────────────────
 
