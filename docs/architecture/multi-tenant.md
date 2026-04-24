@@ -71,23 +71,26 @@ CREATE TABLE users (
 
 ## Request Context (How Credentials Flow)
 
-`src/api/cloudstick_context.ts` is a module-level singleton set at the start of each request:
+Because Node.js is heavily asynchronous, using global variables for per-user context is dangerous and can lead to cross-tenant data leaks during concurrent requests.
+
+To solve this, Cloud-Claw uses **`AsyncLocalStorage`** from the `node:async_hooks` module in `src/api/cloudstick_context.ts`. This safely scopes the user's credentials to the exact asynchronous call chain of their request.
 
 ```typescript
-// Set at the start of runAgentLoop()
-setCloudstickUser(user);
+import { runWithCloudstickContext, getCloudstickUser } from './cloudstick_context.js';
 
-// All Cloudstick API calls inside the loop do:
-const ctx = getCloudstickUser();
-const effectiveKey = ctx?.cloudstick_api_key ?? env.CLOUDSTICK_API_KEY;
-
-// Cleared at the end of runAgentLoop()
-setCloudstickUser(null);
+// At the request boundary (e.g. inside loop.ts or slash_handler.ts)
+await runWithCloudstickContext(user, async () => {
+    
+    // Any deep nested code, tools, or SSH executions within this closure
+    // can safely call getCloudstickUser() and will get the correct user,
+    // even if hundreds of other users are concurrently executing.
+    
+    const ctx = getCloudstickUser();
+    const effectiveKey = ctx?.cloudstick_api_key ?? env.CLOUDSTICK_API_KEY;
+});
 ```
 
-This means credentials never leak between concurrent sessions — each request sets and clears its own context.
-
-> **Note on concurrency:** This module-level singleton is safe for the current single-worker deployment. With multiple workers it remains safe because each OS process has its own memory. It would only become unsafe in a true multi-threaded runtime, which Node.js is not.
+This guarantees **100% isolation** between concurrent user sessions within the same Node.js process, making the architecture fully safe for production multi-tenancy.
 
 ---
 
