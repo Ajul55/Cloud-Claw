@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { StatStrip } from './components/StatStrip';
+import { SystemHealthStrip } from './components/SystemHealthStrip';
 import { BurnRateChart } from './components/BurnRateChart';
 import { TopToolsChart } from './components/TopToolsChart';
 import { LaneSplitChart } from './components/LaneSplitChart';
@@ -140,6 +141,15 @@ export default function App() {
             llmCalls={totals.llmCalls}
             pendingHitl={totals.pendingHitl}
             accent={ACCENT}
+            cardRadius={CARD_RADIUS}
+          />
+
+          {/* System Health */}
+          <SystemHealthStrip
+            activeSessions={data?.system?.activeSessions ?? 0}
+            memoryMb={data?.system?.memoryMb ?? 0}
+            uptimeSeconds={data?.system?.uptimeSeconds ?? 0}
+            llmConsecutiveErrors={data?.system?.llmConsecutiveErrors ?? 0}
             cardRadius={CARD_RADIUS}
           />
 

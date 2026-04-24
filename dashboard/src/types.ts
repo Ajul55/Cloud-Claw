@@ -24,4 +24,10 @@ export interface StatsResponse {
     topLane: 1 | 2 | 3;
     createdAt: string;
   }[];
+  system: {
+    activeSessions: number;
+    memoryMb: number;
+    uptimeSeconds: number;
+    llmConsecutiveErrors: number;
+  };
 }
