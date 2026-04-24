@@ -3,13 +3,14 @@ import {
     acquireSession,
     releaseSession,
     getTotalActiveSessions,
+    getActiveSessions,
 } from './session_limiter.js';
 
 describe('getTotalActiveSessions', () => {
     beforeEach(() => {
         // Release any lingering sessions between tests
-        releaseSession('acc-a');
-        releaseSession('acc-b');
+        while (getActiveSessions('acc-a') > 0) releaseSession('acc-a');
+        while (getActiveSessions('acc-b') > 0) releaseSession('acc-b');
     });
 
     it('returns 0 when no sessions are active', () => {
