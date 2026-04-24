@@ -4,16 +4,11 @@ What we built is a solid **Version 1**. This document tracks what comes next to 
 
 ---
 
-## ⚠️ Pre-Launch Fix Required (Do This Before Going Live)
+## ✅ Pre-Launch Fix — Done
 
-**The problem:** Cloud-Claw currently runs as 2 Node.js workers sharing one port (PM2 cluster mode). The live-streaming system stores each session's event channel in the worker's own memory. If a user's "send message" request lands on Worker 1 but their "receive stream" request lands on Worker 2, the stream hangs silently — the wrong worker answers.
+PM2 runs 1 worker (`instances: 1` in `ecosystem.config.cjs`). Memory restart threshold bumped to **1024 MB** (was 512 MB) to give headroom for 10+ concurrent sessions.
 
-**The fix (5 minutes):** In `ecosystem.config.cjs`, change:
-```js
-instances: 2  →  instances: 1
-```
-
-**The permanent fix** is Phase 5 (Redis pub/sub), which lets multiple workers share the event bus.
+**The permanent multi-worker fix** is Phase 5 (Redis pub/sub) — defer until 100+ concurrent active sessions.
 
 ---
 
@@ -28,18 +23,9 @@ instances: 2  →  instances: 1
 
 ---
 
-## Phase 2 — Concurrent Session Limits
+## Phase 2 — Completed ✅
 
-**What it is:** Right now, if 100 Cloudstick users all start chatting at the same moment, all 100 sessions run simultaneously. Each plan should have a cap on how many active sessions can run at once. If a user hits the cap, they get a clear "please wait" message.
-
-**Why it matters:** Without this, a single Pro account could open 50 browser tabs and use 50× the resources.
-
-**What needs to be built:**
-- A counter tracking how many sessions are actively running per account
-- Return `429 Too Many Requests` with a clear message when the limit is reached
-- Automatically decrement the counter when a session finishes or times out
-
-**Proposed limits:**
+Per-account concurrent session limits. Returns `429 Too Many Requests` when at cap. Counter decrements automatically when a session finishes or times out.
 
 | Plan | Max concurrent sessions |
 |---|---|
@@ -49,73 +35,69 @@ instances: 2  →  instances: 1
 
 ---
 
-## Phase 3 — Crash Recovery and Stream Reconnect
+## Phase 3 — Completed ✅
 
-**What it is:** If Cloud-Claw restarts mid-conversation (e.g. during a deployment), the user's open SSE stream disconnects. The client should be able to reconnect and pick up where things left off.
-
-**Why it matters:** A crash mid-task loses the stream. In production, users will notice.
-
-**What needs to be built:**
-- Reconnect logic on the Cloudstick frontend — retry the stream URL after 2–3 seconds if the connection drops
-- A "replay last event" mechanism so users don't see a blank screen on reconnect
+SSE reconnect with replay buffer. If Cloud-Claw restarts mid-conversation the client reconnects and replays the last 50 events via `Last-Event-ID`. No lost output on deployment.
 
 ---
 
-## Phase 4 — Usage Tracking Per Account
+## Phase 4 — Completed ✅
 
-**What it is:** Track how many AI calls, token usage, and server actions each Cloudstick account uses per month.
-
-**Why it matters:** Without this, you cannot charge per usage or spot accounts using far more than they pay for.
-
-**What needs to be built:**
-- Log each Cloud-Claw session to the existing `usage_log` table (partially done)
-- Build a report endpoint Cloudstick can call to get usage per account per billing period
-- Set hard monthly caps per plan if needed
-
-**Cost estimate (MiniMax 2.5, 20 servers troubleshooting daily):**
-~$13–20/month in API costs. The biggest variable is how much log output the AI reads — large log files inflate input token counts quickly. After the first week, check:
-```sql
-SELECT SUM(prompt_tokens), SUM(cost_usd) FROM usage_log;
-```
+Usage tracking per account. Every LLM call logged to `usage_log` (tokens in/out, cost, tool name, account ID). Monthly call caps enforced per plan (Starter: 100, Pro: 1000, Business: 10000). Report endpoint: `GET /api/usage/:accountId?period=YYYY-MM`.
 
 ---
 
-## Phase 5 — Horizontal Scaling + Job Queue
+## Phase 5 — Deferred (not needed yet)
 
-**What it is:** Run multiple Cloud-Claw servers behind a load balancer. This phase also adds a job queue so in-progress diagnoses survive a server restart.
+**Trigger:** When sustained concurrent active sessions exceed ~100.
 
-**Why it matters:** A single machine has a ceiling. When Cloudstick has hundreds of active users, one server will not be enough. Without a job queue, a server restart during a live diagnosis silently loses that session.
+**What it is:** Replace the in-process SSE event bus and session limiter with Redis pub/sub + Redis atomic counters. Allows multiple PM2 workers (or multiple servers) to share state. PostgreSQL LISTEN/NOTIFY is the no-new-infrastructure alternative at lower scale.
 
-**What needs to be built:**
-- Add **Redis** to the infrastructure (one Redis instance serves both purposes below)
-- Move the SSE event bus from in-process memory to **Redis pub/sub** — any Cloud-Claw worker can send events to any open stream. This also re-enables the 2-worker PM2 setup
-- Add **BullMQ** (runs on the same Redis) as a job queue — each chat session becomes a persisted job that survives restarts and retries failed LLM calls automatically
-
-**Note on the job queue:** A queue is not needed now — Node.js async handles 20–50 concurrent sessions easily without one. The reason to add it alongside Redis is that BullMQ runs on Redis — once Redis is in, the queue comes at almost no extra cost and gives you crash recovery and retry logic for free.
+**Decision log (2026-04-24):** At current and near-future scale (300–400 registered users, ~20–50 concurrent sessions peak), single-worker Node.js handles load without issue. Phase 5 adds operational complexity for no current benefit. Revisit when monitoring (Phase 6) shows sustained sessions approaching 100.
 
 ---
 
-## Phase 6 — Monitoring and Alerts
+## Phase 6 — Completed ✅
 
-**What it is:** Visibility into how the system is behaving in production.
+Ops monitoring, alerting, and dashboard health metrics. Built 2026-04-24.
 
-**Why it matters:** You will not know something is wrong unless you are watching.
+**What was built:**
 
-**What needs to be built:**
-- Structured logging (currently logs to console — needs shipping to a log aggregator)
-- A dashboard showing active sessions, approval queue depth, error rate
-- Alerts when the error rate spikes or the approval queue grows stale
-- Uptime monitoring on `/health` (UptimeRobot free tier is sufficient to start)
+- **PM2 memory limit** bumped to 1024 MB (was 512 MB)
+- **LLM health counter** (`src/telemetry/llm_health.ts`) — tracks consecutive API failures, resets on success
+- **Ops alert scheduler** (`src/telemetry/ops_alerts.ts`) — 5-minute cron, posts to a private Slack Incoming Webhook (`SLACK_OPS_WEBHOOK_URL`). Completely separate from the user-facing Slack bot. Four alert conditions:
+  - Memory > 800 MB → warning
+  - Database unreachable → critical
+  - 3+ consecutive LLM API failures → critical
+  - Process uptime < 5 min (recent crash) → warning
+- **`/health` endpoint** gains `activeSessions` and `pendingApprovals` fields
+- **Dashboard stats API** (`/api/stats`) gains a `system` field: `{ activeSessions, memoryMb, uptimeSeconds, llmConsecutiveErrors }`
+- **Dashboard UI** — new System Health strip above the burn-rate chart: 4 cards (Active Sessions, Memory, Uptime, LLM Errors) that turn red when thresholds are breached
+
+**Still to do (out of scope for Phase 6):**
+- Ship structured logs to an external aggregator (Datadog, Logtail) — the logger already outputs JSON, just pipe stdout when ready
+- Alert storm suppression — add a `lastAlertedAt` cooldown if the same alert fires repeatedly
+- UptimeRobot setup — free external monitor on `/health`, 5-minute interval (manual, see below)
+
+**UptimeRobot setup (5 minutes, manual):**
+1. Create free account at uptimerobot.com
+2. Add monitor: HTTP(s), URL `https://<your-server>:9000/health`, interval 5 min
+3. Add email/SMS alert contact
+
+**Slack ops channel setup (5 minutes, manual):**
+1. Create private `#cloudclaw-ops` channel in your ops Slack workspace
+2. Create a Slack app → Incoming Webhooks → add to `#cloudclaw-ops`
+3. Add webhook URL to `.env`: `SLACK_OPS_WEBHOOK_URL=https://hooks.slack.com/services/...`
 
 ---
 
 ## Priority Order
 
-| # | What | Effort | When |
-|---|---|---|---|
-| **Pre-launch** | Drop PM2 to 1 worker (`instances: 1` in `ecosystem.config.cjs`) | 5 minutes | **Right now — blocks streaming** |
-| Phase 2 | Concurrent session limits (429 when at cap) | 1–2 days | Before public launch |
-| Phase 3 | Crash recovery / SSE reconnect | 2–3 days | Before public launch |
-| Phase 4 | Usage tracking + billing report endpoint | 2–3 days | Needed for billing |
-| Phase 5 | Redis (SSE pub/sub + BullMQ job queue) + 2nd worker | 1–2 weeks | When user count exceeds ~50 concurrent |
-| Phase 6 | Monitoring + alerts | 1 week | Alongside Phase 4–5 |
+| # | What | Status |
+|---|---|---|
+| Pre-launch | PM2 single worker + memory limit | ✅ Done |
+| Phase 2 | Concurrent session limits | ✅ Done |
+| Phase 3 | Crash recovery / SSE reconnect | ✅ Done |
+| Phase 4 | Usage tracking + billing report endpoint | ✅ Done |
+| Phase 6 | Monitoring + ops alerts | ✅ Done |
+| Phase 5 | Redis pub/sub + multi-worker | Deferred — trigger at 100+ concurrent sessions |
