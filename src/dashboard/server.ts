@@ -1,7 +1,7 @@
 import http from 'http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fetchStats, type Range } from './queries.js';
+import { fetchStats, fetchSessions, fetchServers, fetchApprovals, fetchTools, type Range } from './queries.js';
 import { isDBConfigured } from '../database/db.js';
 
 // process.cwd() is /app in Docker and repo root in dev — both correct
@@ -62,6 +62,89 @@ export async function handleDashboardRequest(
             res.end(JSON.stringify(stats));
         } catch (err) {
             console.error('[dashboard] /api/stats error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
+    // ── /api/sessions ────────────────────────────────────────────────────────
+    if (pathname === '/api/sessions') {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        try {
+            const sessions = await fetchSessions(100);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ sessions }));
+        } catch (err) {
+            console.error('[dashboard] /api/sessions error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
+    // ── /api/servers ─────────────────────────────────────────────────────────
+    if (pathname === '/api/servers') {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        try {
+            const servers = await fetchServers();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ servers }));
+        } catch (err) {
+            console.error('[dashboard] /api/servers error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
+    // ── /api/approvals ───────────────────────────────────────────────────────
+    if (pathname === '/api/approvals') {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        try {
+            const statusFilter = url.searchParams.get('status') ?? undefined;
+            const approvals = await fetchApprovals(statusFilter);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ approvals }));
+        } catch (err) {
+            console.error('[dashboard] /api/approvals error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
+    // ── /api/tools ───────────────────────────────────────────────────────────
+    if (pathname === '/api/tools') {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        const rangeParam = url.searchParams.get('range') ?? '24h';
+        if (!VALID_RANGES.has(rangeParam as Range)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_range' }));
+            return;
+        }
+        try {
+            const result = await fetchTools(rangeParam as Range);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[dashboard] /api/tools error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'internal_error' }));
         }

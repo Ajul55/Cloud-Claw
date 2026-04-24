@@ -1,18 +1,21 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   BarChart2, TrendingUp, MessageSquare, Wrench, ServerIcon,
   Settings, HelpCircle, Check,
 } from './Icons';
 import type { IconProps } from './Icons';
+import type { NavPage } from '../types';
 
 interface SidebarProps {
   pendingHitl: number;
   accent: string;
+  activeNav: NavPage;
+  onNavChange: (page: NavPage) => void;
 }
 
 type NavEntry = {
   Icon: React.ComponentType<IconProps>;
-  label: string;
+  label: NavPage;
 };
 
 const NAV_MAIN: NavEntry[] = [
@@ -28,8 +31,7 @@ const NAV_GENERAL: NavEntry[] = [
   { Icon: HelpCircle, label: 'Help' },
 ];
 
-export function Sidebar({ pendingHitl, accent }: SidebarProps) {
-  const [activeNav, setActiveNav] = useState('Analytics');
+export function Sidebar({ pendingHitl, accent, activeNav, onNavChange }: SidebarProps) {
   const hasPending = pendingHitl > 0;
 
   return (
@@ -67,7 +69,7 @@ export function Sidebar({ pendingHitl, accent }: SidebarProps) {
           return (
             <button
               key={label}
-              onClick={() => setActiveNav(label)}
+              onClick={() => onNavChange(label)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
                 borderRadius: 9, border: 'none', cursor: 'pointer', textAlign: 'left',
@@ -104,7 +106,7 @@ export function Sidebar({ pendingHitl, accent }: SidebarProps) {
           return (
             <button
               key={label}
-              onClick={() => setActiveNav(label)}
+              onClick={() => onNavChange(label)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
                 borderRadius: 9, border: 'none', cursor: 'pointer', textAlign: 'left',

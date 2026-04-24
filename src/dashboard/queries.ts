@@ -58,6 +58,131 @@ const LANE_LABELS: Record<number, 'API' | 'SSH Read' | 'SSH Write'> = {
     3: 'SSH Write',
 };
 
+export interface SessionRow {
+    id: string;
+    channel: string;
+    userId: string;
+    status: string;
+    iteration: number;
+    problemClass: string | null;
+    createdAt: string;
+    updatedAt: string;
+    lastActivity: string | null;
+}
+
+export interface ServerRow {
+    id: number;
+    label: string;
+    ip: string;
+    sshUser: string;
+    sshPort: number;
+    active: boolean;
+    addedAt: string;
+}
+
+export interface ApprovalRow {
+    id: number;
+    sessionId: string;
+    command: string;
+    targetHost: string;
+    rationale: string | null;
+    status: string;
+    requestedAt: string;
+    resolvedAt: string | null;
+}
+
+export interface ToolsResult {
+    tools: { toolName: string; count: number; lane: 1 | 2 | 3 }[];
+    totalCalls: number;
+}
+
+export async function fetchSessions(limit = 50): Promise<SessionRow[]> {
+    const pool = getPool();
+    const res = await pool.query(
+        `SELECT id, channel, user_id, status, iteration, problem_class,
+                created_at, updated_at, last_activity
+         FROM sessions
+         ORDER BY COALESCE(last_activity, updated_at) DESC
+         LIMIT $1`,
+        [limit],
+    );
+    return res.rows.map(r => ({
+        id:           r.id as string,
+        channel:      r.channel as string,
+        userId:       r.user_id as string,
+        status:       r.status as string,
+        iteration:    Number(r.iteration),
+        problemClass: r.problem_class as string | null,
+        createdAt:    new Date(r.created_at).toISOString(),
+        updatedAt:    new Date(r.updated_at).toISOString(),
+        lastActivity: r.last_activity ? new Date(r.last_activity).toISOString() : null,
+    }));
+}
+
+export async function fetchServers(): Promise<ServerRow[]> {
+    const pool = getPool();
+    const res = await pool.query(
+        `SELECT id, label, ip, ssh_user, ssh_port, active, added_at
+         FROM servers
+         ORDER BY id ASC`,
+    );
+    return res.rows.map(r => ({
+        id:       Number(r.id),
+        label:    r.label as string,
+        ip:       r.ip as string,
+        sshUser:  r.ssh_user as string,
+        sshPort:  Number(r.ssh_port),
+        active:   r.active as boolean,
+        addedAt:  new Date(r.added_at).toISOString(),
+    }));
+}
+
+export async function fetchApprovals(status?: string): Promise<ApprovalRow[]> {
+    const pool = getPool();
+    const where = status ? `WHERE status = $1` : '';
+    const params = status ? [status] : [];
+    const res = await pool.query(
+        `SELECT id, session_id, command, target_host, rationale, status,
+                requested_at, resolved_at
+         FROM approval_queue
+         ${where}
+         ORDER BY requested_at DESC
+         LIMIT 100`,
+        params,
+    );
+    return res.rows.map(r => ({
+        id:          Number(r.id),
+        sessionId:   r.session_id as string,
+        command:     r.command as string,
+        targetHost:  r.target_host as string,
+        rationale:   r.rationale as string | null,
+        status:      r.status as string,
+        requestedAt: new Date(r.requested_at).toISOString(),
+        resolvedAt:  r.resolved_at ? new Date(r.resolved_at).toISOString() : null,
+    }));
+}
+
+export async function fetchTools(range: Range): Promise<ToolsResult> {
+    const pool = getPool();
+    const interval = RANGE_INTERVAL[range];
+    const res = await pool.query(
+        `SELECT tool_name, COUNT(*) AS count, ${laneCase()} AS lane
+         FROM usage_log
+         WHERE created_at >= NOW() - $1::interval
+           AND tool_name IS NOT NULL
+         GROUP BY tool_name, lane
+         ORDER BY count DESC
+         LIMIT 50`,
+        [interval],
+    );
+    const tools = res.rows.map(r => ({
+        toolName: r.tool_name as string,
+        count:    Number(r.count),
+        lane:     Number(r.lane) as 1 | 2 | 3,
+    }));
+    return { tools, totalCalls: tools.reduce((s, t) => s + t.count, 0) };
+}
+
 export async function fetchStats(range: Range): Promise<StatsResult> {
     const pool = getPool();
     const interval = RANGE_INTERVAL[range];

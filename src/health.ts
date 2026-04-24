@@ -19,7 +19,10 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
     const server = http.createServer(async (req, res) => {
         // Dashboard routes (/api/stats and /dashboard/*) take priority
         const url = req.url ?? '/';
-        if (url === '/api/stats' || url.startsWith('/api/stats?') || url === '/dashboard' || url.startsWith('/dashboard/')) {
+        const dashboardApiRoutes = ['/api/stats', '/api/sessions', '/api/servers', '/api/approvals', '/api/tools'];
+        const isDashboardRoute = dashboardApiRoutes.some(r => url === r || url.startsWith(r + '?'))
+            || url === '/dashboard' || url.startsWith('/dashboard/');
+        if (isDashboardRoute) {
             await handleDashboardRequest(req, res);
             return;
         }
