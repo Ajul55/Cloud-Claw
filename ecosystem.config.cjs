@@ -27,7 +27,7 @@ module.exports = {
         max_restarts: 10,
         min_uptime: '10s',
         restart_delay: 3000,
-        max_memory_restart: '512M', // restart if memory leaks
+        max_memory_restart: '1024M', // restart if memory leaks
         watch: false,
         env: {
             NODE_ENV: 'development',
