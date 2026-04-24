@@ -144,14 +144,20 @@ export function getDecryptedCloudstickCredentials(user: CloudclawUser): {
     apiKey: string | null;
     apiSecret: string | null;
 } {
-    try {
-        return {
-            apiKey: user.cloudstick_api_key ? decrypt(user.cloudstick_api_key) : null,
-            apiSecret: user.cloudstick_api_secret ? decrypt(user.cloudstick_api_secret) : null,
-        };
-    } catch (err) {
-        throw new Error('[user_service] Failed to decrypt credentials — check ENCRYPTION_KEY');
-    }
+    const decryptOrFallback = (value: string | null): string | null => {
+        if (!value) return null;
+        try {
+            return decrypt(value);
+        } catch (err) {
+            // Fall back to plaintext for pre-migration data
+            return value;
+        }
+    };
+
+    return {
+        apiKey: decryptOrFallback(user.cloudstick_api_key),
+        apiSecret: decryptOrFallback(user.cloudstick_api_secret),
+    };
 }
 
 export function hasCloudstickCredentials(user: CloudclawUser): boolean {
