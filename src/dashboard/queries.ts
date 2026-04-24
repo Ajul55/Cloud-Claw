@@ -1,4 +1,6 @@
 import { getPool } from '../database/db.js';
+import { getTotalActiveSessions } from '../services/session_limiter.js';
+import { getConsecutiveLlmFailures } from '../telemetry/llm_health.js';
 
 export type Range = '24h' | '7d' | '30d';
 
@@ -17,6 +19,12 @@ export interface StatsResult {
         topLane: 1 | 2 | 3;
         createdAt: string;
     }[];
+    system: {
+        activeSessions: number;
+        memoryMb: number;
+        uptimeSeconds: number;
+        llmConsecutiveErrors: number;
+    };
 }
 
 const RANGE_INTERVAL: Record<Range, string> = {
@@ -162,5 +170,11 @@ export async function fetchStats(range: Range): Promise<StatsResult> {
             topLane:     Number(r.top_lane) as 1 | 2 | 3,
             createdAt:   new Date(r.created_at).toISOString(),
         })),
+        system: {
+            activeSessions:        getTotalActiveSessions(),
+            memoryMb:              Math.round(process.memoryUsage().rss / 1024 / 1024),
+            uptimeSeconds:         Math.round(process.uptime()),
+            llmConsecutiveErrors:  getConsecutiveLlmFailures(),
+        },
     };
 }
