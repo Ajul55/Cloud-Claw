@@ -11,6 +11,7 @@
 import http from 'http';
 import { getPool, isDBConfigured } from './database/db.js';
 import { handleDashboardRequest } from './dashboard/server.js';
+import { getTotalActiveSessions } from './services/session_limiter.js';
 
 type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
 
@@ -55,12 +56,22 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
 
         try {
             await getPool().query('SELECT 1');
+            let pendingApprovals = 0;
+            try {
+                const r = await getPool().query<{ count: string }>(
+                    `SELECT COUNT(*) AS count FROM approval_queue WHERE status = 'pending'`
+                );
+                pendingApprovals = parseInt(r.rows[0]?.count ?? '0', 10);
+            } catch { /* non-fatal */ }
+
             res.writeHead(200, headers);
             res.end(JSON.stringify({
                 status: 'ok',
                 db: 'connected',
                 uptime: Math.round(process.uptime()),
                 memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
+                activeSessions: getTotalActiveSessions(),
+                pendingApprovals,
             }));
         } catch {
             res.writeHead(503, headers);
