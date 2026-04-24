@@ -16,6 +16,7 @@ import { expireStaleApprovals } from './jobs/expire_approvals.js';
 import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
 import { startHealthServer } from './health.js';
+import { startAlertScheduler } from './telemetry/ops_alerts.js';
 import { createGatewayHandler } from './interfaces/http_gateway.js';
 
 // ─── FIX: Global crash handlers ─────────────────────────────────────────────
@@ -75,6 +76,9 @@ async function main(): Promise<void> {
     console.log('');
     console.log('✅ Cloud-Claw is operational. Waiting for messages...');
     console.log('');
+
+    // Phase 6: Ops alerting
+    startAlertScheduler();
 
     cron.schedule('*/5 * * * *', () => {
         void expireStaleApprovals();
