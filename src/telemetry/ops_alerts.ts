@@ -19,8 +19,8 @@ function postWebhook(url: string, body: string): Promise<void> {
             },
         };
         const req = https.request(options, (res) => {
-            res.resume();
             res.on('end', resolve);
+            res.resume();
         });
         req.on('error', reject);
         req.write(body);
@@ -32,8 +32,10 @@ export async function sendOpsAlert(
     title: string,
     message: string,
     severity: 'warning' | 'critical',
+    ...args: [webhookUrl?: string]
 ): Promise<void> {
-    if (!env.SLACK_OPS_WEBHOOK_URL) return;
+    const webhookUrl = args.length > 0 ? args[0] : env.SLACK_OPS_WEBHOOK_URL;
+    if (!webhookUrl) return;
 
     const color = severity === 'critical' ? '#dc2626' : '#f59e0b';
     const payload = JSON.stringify({
@@ -56,7 +58,7 @@ export async function sendOpsAlert(
     });
 
     try {
-        await postWebhook(env.SLACK_OPS_WEBHOOK_URL, payload);
+        await postWebhook(webhookUrl, payload);
     } catch (err) {
         console.error('[ops-alerts] Failed to send Slack alert:', err);
     }

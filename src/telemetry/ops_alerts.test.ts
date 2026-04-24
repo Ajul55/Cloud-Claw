@@ -79,4 +79,9 @@ describe('sendOpsAlert', () => {
         const payload = JSON.parse(mockWrite.mock.calls[0][0] as string) as { attachments: { color: string }[] };
         expect(payload.attachments[0].color).toBe('#dc2626');
     });
+
+    it('does nothing when webhookUrl is undefined', async () => {
+        await sendOpsAlert('x', 'y', 'warning', undefined);
+        expect(mockRequest).not.toHaveBeenCalled();
+    });
 });
