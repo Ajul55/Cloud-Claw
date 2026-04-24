@@ -68,6 +68,17 @@ export function getActiveSessions(accountId: string): number {
 }
 
 /**
+ * Return the total number of active sessions across all accounts.
+ */
+export function getTotalActiveSessions(): number {
+    let total = 0;
+    for (const count of activeSessions.values()) {
+        total += count;
+    }
+    return total;
+}
+
+/**
  * Check whether the account has reached its monthly LLM call cap.
  * Returns true if at or over cap. Fails open (returns false) when DB is unavailable.
  */
