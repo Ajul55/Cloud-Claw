@@ -72,6 +72,14 @@ const EnvSchema = z.object({
     // CORS: allowed origin for the HTTP gateway (e.g. https://app.cloudstick.io)
     // Set to '*' during development. Omit or leave empty to deny all cross-origin requests.
     CORS_ORIGIN: z.preprocess((val) => val === '' ? undefined : val, z.string().optional()),
+
+    // Ops alerting — Slack Incoming Webhook URL for the private #ops-alerts channel.
+    // Completely separate from SLACK_BOT_TOKEN (user-facing). Optional — alerting
+    // is silently skipped if unset so the app boots without it.
+    SLACK_OPS_WEBHOOK_URL: z.preprocess(
+        (val) => val === '' ? undefined : val,
+        z.string().url().optional()
+    ),
 });
 
 function loadEnv() {
