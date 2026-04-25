@@ -1,6 +1,8 @@
 -- Cloud-Claw Schema
 -- Run this once: psql -U cloudclaw -d cloudclaw -f src/database/schema.sql
 
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- ─── Causality Map ────────────────────────────────────────────────────────────
 -- Stores the discovered WordPress hosting stack topology per client/domain.
 CREATE TABLE IF NOT EXISTS causality_map (
@@ -78,10 +80,6 @@ CREATE TABLE IF NOT EXISTS servers (
   added_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-INSERT INTO servers (label, ip, ssh_user, ssh_port) VALUES
-  ('production', '139.84.130.63', 'root', 22),
-  ('test',       '65.20.83.180',  'root', 22)
-ON CONFLICT (label) DO NOTHING;
 
 -- ─── LLM Usage Telemetry ──────────────────────────────────────────────────────
 -- Tracks token usage and cost
@@ -108,13 +106,13 @@ CREATE TABLE IF NOT EXISTS fix_memory (
   issue_text    TEXT        NOT NULL,
   fix_command   TEXT        NOT NULL,
   problem_class TEXT        NOT NULL,
-  embedding     vector(1536),
+  embedding     vector(768),
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_fix_memory_embedding
-  ON fix_memory USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS fix_memory_embedding_idx
+  ON fix_memory USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX IF NOT EXISTS idx_fix_memory_problem_class
   ON fix_memory(problem_class);
@@ -146,4 +144,3 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS users_platform_idx ON users (platform);
 CREATE INDEX IF NOT EXISTS users_platform_id_idx ON users (platform_id);
-

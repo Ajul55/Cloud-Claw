@@ -3,7 +3,8 @@ import {
     getApprovalById,
     updateApprovalStatus,
     getSession,
-    upsertSession
+    upsertSession,
+    resolveApprovalAndSaveSession,
 } from '../database/db.js';
 import { getToolByName, getAllTools } from '../tools/tool_registry.js';
 import { decodeToolApprovalCommand } from './tool_approval.js';
@@ -126,13 +127,6 @@ export async function resumeApprovedSession(
             (m: any) => m.role === 'tool' && m.tool_call_id === approval.tool_call_id
         );
 
-        const didUpdate = await updateApprovalStatus(approvalId, 'rejected', pilotUserId);
-        if (!didUpdate) {
-            console.warn(`[resume] Approval ${approvalId} was already handled before rejection could be applied.`);
-            await onReply('⚠️ This approval is already being handled or has already been processed.');
-            return;
-        }
-
         if (placeholderIndex !== -1) {
             messages[placeholderIndex] = {
                 role: 'tool',
@@ -147,7 +141,8 @@ export async function resumeApprovedSession(
             });
         }
 
-        await upsertSession({
+        // MED-9: atomic — approval status + session save in one transaction
+        const didUpdate = await resolveApprovalAndSaveSession(approvalId, 'rejected', {
             id: approval.session_id,
             channel: session.channel,
             user_id: session.user_id,
@@ -157,6 +152,11 @@ export async function resumeApprovedSession(
             iteration: session.iteration ?? 0,
             expectedVersion: sessionVersion,
         });
+        if (!didUpdate) {
+            console.warn(`[resume] Approval ${approvalId} was already handled before rejection could be applied.`);
+            await onReply('⚠️ This approval is already being handled or has already been processed.');
+            return;
+        }
         sessionVersion++;
 
         await runAgentLoop(
@@ -287,12 +287,23 @@ export async function resumeApprovedSession(
         }
     }
 
-    const didUpdate = await updateApprovalStatus(approvalId, 'approved', pilotUserId);
+    // MED-9: Mark approved atomically before executing (session saved again after tool runs)
+    const didUpdate = await resolveApprovalAndSaveSession(approvalId, 'approved', {
+        id: approval.session_id,
+        channel: session.channel,
+        user_id: session.user_id,
+        reply_target: session.reply_target ?? null,
+        messages: messages as unknown as Array<Record<string, unknown>>,
+        receipts,
+        iteration: session.iteration ?? 0,
+        expectedVersion: sessionVersion,
+    });
     if (!didUpdate) {
         console.warn(`[resume] Approval ${approvalId} was already handled before execution could start.`);
         await onReply('⚠️ This approval is already being handled or has already been processed.');
         return;
     }
+    sessionVersion++;
 
     // 6. Execute the tool NOW
     await onReply(`⚙️ Running \`${toolName}\`…`);

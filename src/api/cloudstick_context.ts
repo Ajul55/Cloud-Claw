@@ -46,6 +46,10 @@ export function getCloudstickUser(): CloudclawUser | null {
     return storage.getStore()?.user ?? null;
 }
 
+export function hasCloudstickContext(): boolean {
+    return storage.getStore() !== undefined;
+}
+
 /**
  * @deprecated Use runWithCloudstickContext() instead.
  * Kept temporarily for backward compatibility during migration.

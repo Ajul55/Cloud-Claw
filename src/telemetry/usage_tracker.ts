@@ -10,8 +10,9 @@ export interface UsageData {
     accountId?: string;
 }
 
-// Approximate cost in USD per 1,000,000 tokens
-const PRICING: Record<string, { in: number; out: number }> = {
+// Approximate cost in USD per 1,000,000 tokens.
+// Add new models here when LLM provider changes.
+const LLM_PRICING: Record<string, { in: number; out: number }> = {
     // OpenAI Settings
     'gpt-4o': { in: 5, out: 15 },
     'gpt-4o-2024-05-13': { in: 5, out: 15 },
@@ -30,7 +31,11 @@ const PRICING: Record<string, { in: number; out: number }> = {
 };
 
 function calculateCost(model: string, tokensIn: number, tokensOut: number): number {
-    const rate = PRICING[model.toLowerCase()] || { in: 0, out: 0 };
+    const rate = LLM_PRICING[model.toLowerCase()];
+    if (!rate) {
+        console.warn(`[usage_tracker] Unknown model "${model}" — cost will be $0. Add pricing to LLM_PRICING.`);
+        return 0;
+    }
     return (tokensIn / 1_000_000) * rate.in + (tokensOut / 1_000_000) * rate.out;
 }
 

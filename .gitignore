@@ -13,7 +13,6 @@ keys/
 # Test scripts
 test_*.ts
 test-*.ts
-*.test.ts
 
 # Logs
 session_*.json

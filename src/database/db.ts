@@ -5,6 +5,10 @@ const { Pool } = pg;
 
 // ─── Singleton pool ────────────────────────────────────────────────────────────
 let _pool: pg.Pool | null = null;
+// Single-process assumption: _dbReady is in-process state.
+// In a multi-process (cluster) or multi-instance deployment, each process
+// maintains its own flag. Redis-backed readiness would be needed for
+// true cross-process coordination (Phase 3).
 let _dbReady = false;
 
 export function isDBConfigured(): boolean {
@@ -37,16 +41,43 @@ export async function connectDB(): Promise<void> {
         return;
     }
 
-    try {
-        const pool = getPool();
-        const client = await pool.connect();
-        client.release();
-        _dbReady = true;
-
+    let lastConnectError: Error | undefined;
+    for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            // FIX: Acquire advisory lock so only one PM2 cluster worker runs migrations at startup.
-            // Lock ID 42 is arbitrary but stable — all workers compete for the same lock.
-            const migrationClient = await pool.connect();
+            const pool = getPool();
+            const client = await pool.connect();
+            client.release();
+            _dbReady = true;
+            lastConnectError = undefined;
+            break;
+        } catch (err) {
+            lastConnectError = err instanceof Error ? err : new Error(String(err));
+            if (attempt < 3) {
+                const delay = Math.pow(2, attempt) * 1000;
+                console.warn(`[DB] Connection attempt ${attempt}/3 failed, retrying in ${delay / 1000}s...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    if (lastConnectError) {
+        const msg = lastConnectError.message;
+        console.error(`[DB] PostgreSQL connection failed after 3 attempts: ${msg}`);
+        console.error('[DB] To set up PostgreSQL, run:');
+        console.error('[DB]   1. sudo -u postgres createuser cloudclaw');
+        console.error('[DB]   2. sudo -u postgres createdb -O cloudclaw cloudclaw');
+        console.error('[DB]   3. psql -U cloudclaw -d cloudclaw -f src/database/schema.sql');
+        console.error('[DB] Falling back to in-memory mode.');
+        _dbReady = false;
+        _pool = null;
+        return;
+    }
+
+    // FIX: Acquire advisory lock so only one PM2 cluster worker runs migrations at startup.
+    // Lock ID 42 is arbitrary but stable — all workers compete for the same lock.
+    const pool = getPool();
+    try {
+        const migrationClient = await pool.connect();
             try {
                 await migrationClient.query('SELECT pg_advisory_lock(42)');
 
@@ -64,6 +95,13 @@ export async function connectDB(): Promise<void> {
                 await migrationClient.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS slack_workspace_id TEXT;`);
                 await migrationClient.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS plan_tier TEXT NOT NULL DEFAULT 'starter' CHECK (plan_tier IN ('starter', 'pro', 'business'));`);
                 await migrationClient.query(`ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS plan_updated_at TIMESTAMPTZ;`);
+
+                // HIGH-8: Store Slack message info on approval so expiry job can update the card
+                await migrationClient.query(`ALTER TABLE IF EXISTS approval_queue ADD COLUMN IF NOT EXISTS slack_channel TEXT;`);
+                await migrationClient.query(`ALTER TABLE IF EXISTS approval_queue ADD COLUMN IF NOT EXISTS slack_message_ts TEXT;`);
+
+                // Usage log: ensure account_id column exists for multi-tenant tracking
+                await migrationClient.query(`ALTER TABLE IF EXISTS usage_log ADD COLUMN IF NOT EXISTS account_id TEXT;`);
 
                 await migrationClient.query('SELECT pg_advisory_unlock(42)');
             } finally {
@@ -88,17 +126,6 @@ export async function connectDB(): Promise<void> {
         }
 
         console.log('[DB] Connected to PostgreSQL ✓');
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[DB] PostgreSQL connection failed: ${msg}`);
-        console.error('[DB] To set up PostgreSQL, run:');
-        console.error('[DB]   1. sudo -u postgres createuser cloudclaw');
-        console.error('[DB]   2. sudo -u postgres createdb -O cloudclaw cloudclaw');
-        console.error('[DB]   3. psql -U cloudclaw -d cloudclaw -f src/database/schema.sql');
-        console.error('[DB] Falling back to in-memory mode.');
-        _dbReady = false;
-        _pool = null;
-    }
 }
 
 export async function closeDB(): Promise<void> {
@@ -206,7 +233,7 @@ export async function getSession(id: string): Promise<SessionRecord | null> {
     }
     const pool = getPool();
     const { rows } = await pool.query<SessionRecord>(
-        'SELECT * FROM sessions WHERE id = $1',
+        'SELECT * FROM sessions WHERE id = $1 LIMIT 1',
         [id]
     );
     return rows[0] ?? null;
@@ -241,6 +268,18 @@ export async function upsertSession(
         return;
     }
 
+    // CRIT-8: Cap messages JSONB at 50KB to prevent unbounded growth
+    const MAX_MESSAGES_BYTES = 50_000;
+    let messagesToStore = session.messages;
+    if (JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+        // Trim from the front (oldest messages) until we're under the cap
+        while (messagesToStore.length > 5 && JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+            messagesToStore = messagesToStore.slice(1);
+        }
+        console.warn(`[DB] Session ${session.id} messages trimmed to ${messagesToStore.length} msgs (>50KB)`);
+    }
+    const messagesJson = JSON.stringify(messagesToStore);
+
     const pool = getPool();
 
     if (session.expectedVersion !== undefined) {
@@ -258,7 +297,7 @@ export async function upsertSession(
              WHERE id = $5 AND version = $6`,
             [
                 session.reply_target ?? null,
-                JSON.stringify(session.messages),
+                messagesJson,
                 JSON.stringify(session.receipts ?? {}),
                 session.iteration,
                 session.id,
@@ -287,7 +326,7 @@ export async function upsertSession(
                 session.channel,
                 session.user_id,
                 session.reply_target ?? null,
-                JSON.stringify(session.messages),
+                messagesJson,
                 JSON.stringify(session.receipts ?? {}),
                 session.iteration,
             ]
@@ -310,6 +349,9 @@ export interface ApprovalRecord {
     tool_call_id: string;
     requested_at: Date;
     resolved_at: Date | null;
+    // HIGH-8: Slack card coordinates for updating the message on expiry
+    slack_channel?: string | null;
+    slack_message_ts?: string | null;
 }
 
 export async function createApproval(
@@ -382,6 +424,125 @@ export async function updateApprovalStatus(
 ): Promise<boolean> {
     const record = await resolveApproval(id, status);
     return record !== null;
+}
+
+/**
+ * MED-9: Atomically update approval status AND save session in a single transaction.
+ * Prevents split-brain if the process crashes between the two operations.
+ */
+export async function resolveApprovalAndSaveSession(
+    approvalId: number,
+    status: 'approved' | 'rejected',
+    session: Pick<SessionRecord, 'id' | 'channel' | 'user_id' | 'iteration' | 'reply_target'> & {
+        messages: Array<Record<string, unknown>>;
+        receipts?: Record<string, unknown>;
+        expectedVersion?: number;
+    }
+): Promise<boolean> {
+    if (!isDBConfigured()) {
+        // In-memory mode — no transaction needed, just do both
+        const approvalOk = await resolveApproval(approvalId, status);
+        if (!approvalOk) return false;
+        await upsertSession(session);
+        return true;
+    }
+
+    // CRIT-8 cap
+    const MAX_MESSAGES_BYTES = 50_000;
+    let messagesToStore = session.messages;
+    if (JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+        while (messagesToStore.length > 5 && JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+            messagesToStore = messagesToStore.slice(1);
+        }
+    }
+    const messagesJson = JSON.stringify(messagesToStore);
+
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Resolve approval atomically
+        const { rows } = await client.query<ApprovalRecord>(
+            `UPDATE approval_queue
+             SET status = $2, resolved_at = NOW()
+             WHERE id = $1 AND status = 'pending'
+             RETURNING *`,
+            [approvalId, status]
+        );
+        if (rows.length === 0) {
+            await client.query('ROLLBACK');
+            return false; // already handled
+        }
+
+        // 2. Save session
+        if (session.expectedVersion !== undefined) {
+            await client.query(
+                `UPDATE sessions SET
+                   reply_target  = $1,
+                   messages      = $2,
+                   receipts      = $3,
+                   iteration     = $4,
+                   last_activity = NOW(),
+                   status        = 'active',
+                   updated_at    = NOW(),
+                   version       = version + 1
+                 WHERE id = $5 AND version = $6`,
+                [
+                    session.reply_target ?? null,
+                    messagesJson,
+                    JSON.stringify(session.receipts ?? {}),
+                    session.iteration,
+                    session.id,
+                    session.expectedVersion,
+                ]
+            );
+        } else {
+            await client.query(
+                `INSERT INTO sessions (id, channel, user_id, reply_target, messages, receipts, iteration, version)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+                 ON CONFLICT (id) DO UPDATE SET
+                   reply_target  = EXCLUDED.reply_target,
+                   messages      = EXCLUDED.messages,
+                   receipts      = EXCLUDED.receipts,
+                   iteration     = EXCLUDED.iteration,
+                   last_activity = NOW(),
+                   status        = 'active',
+                   updated_at    = NOW(),
+                   version       = sessions.version + 1`,
+                [
+                    session.id,
+                    session.channel,
+                    session.user_id,
+                    session.reply_target ?? null,
+                    messagesJson,
+                    JSON.stringify(session.receipts ?? {}),
+                    session.iteration,
+                ]
+            );
+        }
+
+        await client.query('COMMIT');
+        return true;
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+/** HIGH-8: Store the Slack channel + message_ts on an approval so it can be updated on expiry. */
+export async function updateApprovalSlackInfo(id: number, channel: string, ts: string): Promise<void> {
+    if (!isDBConfigured()) {
+        const r = memoryApprovals.get(id);
+        if (r) { r.slack_channel = channel; r.slack_message_ts = ts; }
+        return;
+    }
+    await getPool().query(
+        'UPDATE approval_queue SET slack_channel = $1, slack_message_ts = $2 WHERE id = $3',
+        [channel, ts, id]
+    );
 }
 
 export async function getLatestPendingApproval(sessionId: string): Promise<ApprovalRecord | null> {

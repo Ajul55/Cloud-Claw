@@ -6,6 +6,10 @@ import { isDBConfigured, getPool } from '../database/db.js';
 import { getTotalActiveSessions } from '../services/session_limiter.js';
 import { getConsecutiveLlmFailures } from './llm_health.js';
 
+// MED-11: Dedup restart alerts — don't flood if PM2 enters a crash loop
+let _lastRestartAlertAt = 0;
+const RESTART_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+
 function postWebhook(url: string, body: string): Promise<void> {
     return new Promise((resolve, reject) => {
         const parsed = new URL(url);
@@ -67,10 +71,10 @@ export async function sendOpsAlert(
 async function runChecks(): Promise<void> {
     // 1. Memory high
     const memMb = process.memoryUsage().rss / 1024 / 1024;
-    if (memMb > 800) {
+    if (memMb > 700) {
         await sendOpsAlert(
             'High Memory Usage',
-            `Cloud-Claw is using ${Math.round(memMb)} MB — approaching the 1024 MB restart threshold.`,
+            `Cloud-Claw is using ${Math.round(memMb)} MB — approaching the 900 MB restart threshold.`,
             'warning',
         );
     }
@@ -100,7 +104,9 @@ async function runChecks(): Promise<void> {
 
     // 4. Recent process crash (uptime < 5 min means PM2 just restarted us)
     const uptimeSec = process.uptime();
-    if (uptimeSec < 300) {
+    const now = Date.now();
+    if (uptimeSec < 300 && now - _lastRestartAlertAt > RESTART_ALERT_COOLDOWN_MS) {
+        _lastRestartAlertAt = now;
         await sendOpsAlert(
             'Cloud-Claw Restarted',
             `Process uptime is ${Math.round(uptimeSec / 60)} minute(s) — Cloud-Claw crashed and was restarted by PM2. Check logs: \`pm2 logs cloudclaw\``,

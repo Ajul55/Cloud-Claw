@@ -23,7 +23,7 @@ services:
       # Auto-run schema on first boot (Postgres runs .sql files in /docker-entrypoint-initdb.d/)
       - ./src/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     ports:
-      - "5433:5432"   # Expose on 5433 so it doesn't conflict with local Postgres
+      - "127.0.0.1:5433:5432"   # Expose on 5433 (localhost only) so it doesn't conflict with local Postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cloudclaw -d cloudclaw"]
       interval: 5s

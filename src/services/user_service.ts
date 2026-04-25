@@ -144,20 +144,27 @@ export function getDecryptedCloudstickCredentials(user: CloudclawUser): {
     apiKey: string | null;
     apiSecret: string | null;
 } {
-    const decryptOrFallback = (value: string | null): string | null => {
-        if (!value) return null;
-        try {
-            return decrypt(value);
-        } catch (err) {
-            // Fall back to plaintext for pre-migration data
-            return value;
-        }
-    };
-
     return {
-        apiKey: decryptOrFallback(user.cloudstick_api_key),
-        apiSecret: decryptOrFallback(user.cloudstick_api_secret),
+        apiKey: decryptCloudstickCredential(user.cloudstick_api_key),
+        apiSecret: decryptCloudstickCredential(user.cloudstick_api_secret),
     };
+}
+
+function decryptCloudstickCredential(value: string | null): string | null {
+    if (!value) return null;
+
+    // Backward compatibility for credentials saved before encrypted-at-rest migration.
+    // Encrypted strings follow the format "iv:authTag:ciphertext" (all hex)
+    if (!/^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]+$/i.test(value)) {
+        return value;
+    }
+
+    try {
+        return decrypt(value);
+    } catch (err) {
+        console.error('[user_service] Failed to decrypt Cloudstick credential — returning null. Rotate credentials if this persists.');
+        return null;
+    }
 }
 
 export function hasCloudstickCredentials(user: CloudclawUser): boolean {

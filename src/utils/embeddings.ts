@@ -1,48 +1,38 @@
 /**
- * Voyage AI Embedding Utility
+ * Ollama Embedding Utility
  *
  * Standalone embedding helper for semantic search in fix_memory.
- * Uses Voyage AI voyage-code-2 model (1536 dimensions).
+ * Uses Ollama nomic-embed-text model (768 dimensions) — runs locally, free.
  * Can be swapped to another provider by changing this single file.
  */
 
-const VOYAGE_API_URL = 'https://api.voyageai.com/v1/embeddings';
-const VOYAGE_MODEL = process.env.VOYAGE_MODEL ?? 'voyage-code-2';
-const VOYAGE_API_KEY = process.env.VOYAGE_API_KEY;
+const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text';
 
 /**
- * Generate a 1536-dimension embedding vector for the given text.
- * Returns null if API key is missing or the API call fails.
+ * Generate a 768-dimension embedding vector for the given text.
+ * Returns null if Ollama is unreachable or the call fails.
  */
 export async function generateEmbedding(text: string): Promise<number[] | null> {
-    if (!VOYAGE_API_KEY) {
-        console.warn('[embeddings] VOYAGE_API_KEY not set — skipping embedding');
-        return null;
-    }
     try {
-        const response = await fetch(VOYAGE_API_URL, {
+        const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${VOYAGE_API_KEY}`,
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                input: [text.slice(0, 2000)],
-                model: VOYAGE_MODEL,
+                model: OLLAMA_MODEL,
+                prompt: text.slice(0, 2000),
             }),
         });
 
         if (!response.ok) {
             const err = await response.text();
-            console.error('[embeddings] Voyage API error:', response.status, err);
+            console.error('[embeddings] Ollama error:', response.status, err);
             return null;
         }
 
-        const data = await response.json() as {
-            data?: Array<{ embedding?: number[] }>;
-        };
-        const vector = data.data?.[0]?.embedding;
-        if (!Array.isArray(vector) || vector.length !== 1536) {
+        const data = await response.json() as { embedding?: number[] };
+        const vector = data.embedding;
+        if (!Array.isArray(vector) || vector.length !== 768) {
             console.error('[embeddings] Unexpected vector dimensions:', vector?.length);
             return null;
         }
@@ -54,10 +44,15 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
 }
 
 /**
- * Check if the Voyage embedding API is configured.
+ * Check if the Ollama embedding service is reachable.
  */
-export function isEmbeddingAvailable(): boolean {
-    return Boolean(VOYAGE_API_KEY);
+export async function isEmbeddingAvailable(): Promise<boolean> {
+    try {
+        const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+        return response.ok;
+    } catch {
+        return false;
+    }
 }
 
 /**

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useCountUp } from '../hooks/useCountUp';
 
 interface StatStripProps {
   tokens: number;
@@ -12,142 +13,267 @@ interface StatStripProps {
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  return String(Math.round(n));
 }
 
-// Sparkline SVGs — inline, no deps
-const TokenSparkline = ({ color }: { color: string }) => (
-  <svg viewBox="0 0 60 22" style={{ display: 'block', width: '100%', height: 28 }}>
+// ─── Sparklines with CSS draw animation ─────────────────────────────────────
+
+const TokenSparkline = () => (
+  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
     <defs>
-      <linearGradient id="spk1" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor={color} stopOpacity="0.2" />
-        <stop offset="100%" stopColor={color} stopOpacity="0" />
+      <linearGradient id="spk-tok-line" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stopColor="#EC4899" />
+        <stop offset="100%" stopColor="#F97316" />
       </linearGradient>
+      <linearGradient id="spk-tok-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#EC4899" stopOpacity="0.18" />
+        <stop offset="100%" stopColor="#F97316" stopOpacity="0" />
+      </linearGradient>
+      <filter id="spk-glow-pk">
+        <feGaussianBlur stdDeviation="1.2" result="b" />
+        <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+      </filter>
     </defs>
-    <path d="M0,18 C8,14 12,6 20,8 C28,10 32,16 40,12 C48,8 52,3 60,5" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
-    <path d="M0,18 C8,14 12,6 20,8 C28,10 32,16 40,12 C48,8 52,3 60,5 L60,22 L0,22Z" fill="url(#spk1)" />
-    <circle cx="60" cy="5" r="2" fill={color} />
+    {/* Area fill — no animation, just reveals with path */}
+    <path className="sparkline-path"
+      d="M0,22 C8,18 12,8 20,10 C28,12 32,20 40,15 C48,10 54,4 64,6 L64,28 L0,28Z"
+      fill="url(#spk-tok-fill)" stroke="none"
+      style={{ strokeDasharray: 'none', animationDelay: '0.4s' }}
+    />
+    <path className="sparkline-path"
+      d="M0,22 C8,18 12,8 20,10 C28,12 32,20 40,15 C48,10 54,4 64,6"
+      fill="none" stroke="url(#spk-tok-line)" strokeWidth="2" strokeLinecap="round"
+      filter="url(#spk-glow-pk)"
+    />
+    <circle cx="64" cy="6" r="2.5" fill="#F97316"
+      style={{ animation: 'dotPop 0.3s ease 1.3s both' }} />
   </svg>
 );
 
 const CostSparkline = () => (
-  <svg viewBox="0 0 60 22" style={{ display: 'block', width: '100%', height: 28 }}>
+  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
     <defs>
-      <linearGradient id="spk2" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor="#FBBF24" stopOpacity="0.2" />
+      <linearGradient id="spk-cost-line" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stopColor="#F59E0B" />
+        <stop offset="100%" stopColor="#FBBF24" />
+      </linearGradient>
+      <linearGradient id="spk-cost-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.18" />
         <stop offset="100%" stopColor="#FBBF24" stopOpacity="0" />
       </linearGradient>
     </defs>
-    <path d="M0,16 C6,18 10,10 18,9 C26,8 30,14 38,11 C46,8 50,5 60,7" fill="none" stroke="#FBBF24" strokeWidth="1.8" strokeLinecap="round" />
-    <path d="M0,16 C6,18 10,10 18,9 C26,8 30,14 38,11 C46,8 50,5 60,7 L60,22 L0,22Z" fill="url(#spk2)" />
-    <circle cx="60" cy="7" r="2" fill="#FBBF24" />
+    <path className="sparkline-path"
+      d="M0,20 C7,22 12,12 20,11 C28,10 30,17 40,13 C48,10 54,6 64,8 L64,28 L0,28Z"
+      fill="url(#spk-cost-fill)" stroke="none"
+      style={{ strokeDasharray: 'none', animationDelay: '0.5s' }}
+    />
+    <path className="sparkline-path"
+      d="M0,20 C7,22 12,12 20,11 C28,10 30,17 40,13 C48,10 54,6 64,8"
+      fill="none" stroke="url(#spk-cost-line)" strokeWidth="2" strokeLinecap="round"
+      style={{ animationDelay: '0.5s' }}
+    />
+    <circle cx="64" cy="8" r="2.5" fill="#FBBF24"
+      style={{ animation: 'dotPop 0.3s ease 1.4s both' }} />
   </svg>
 );
 
-const LlmSparkline = () => (
-  <svg viewBox="0 0 60 22" style={{ display: 'block', width: '100%', height: 28 }}>
-    {[3,5,4,7,5,6,9,5,8,10,7,9,10].map((v, i) => (
-      <rect key={i} x={i * 4.5 + 0.5} y={22 - (v / 10) * 18} width={3.8} height={(v / 10) * 18}
-        rx="1" fill={i === 12 ? '#06B6D4' : '#CFFAFE'} />
-    ))}
-  </svg>
-);
+const LlmSparkline = () => {
+  const vals = [3, 5, 4, 7, 5, 6, 9, 5, 8, 10, 7, 9, 10];
+  const max = 10;
+  return (
+    <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
+      <defs>
+        <linearGradient id="spk-llm-bar" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.25" />
+        </linearGradient>
+        <linearGradient id="spk-llm-peak" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#0EA5E9" />
+          <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.5" />
+        </linearGradient>
+      </defs>
+      {vals.map((v, i) => {
+        const h = (v / max) * 22;
+        return (
+          <rect key={i}
+            x={i * 4.8 + 0.5} y={26 - h} width={3.6} height={h} rx="1.5"
+            fill={i === vals.length - 1 ? 'url(#spk-llm-peak)' : 'url(#spk-llm-bar)'}
+            style={{
+              transformBox: 'fill-box', transformOrigin: 'bottom',
+              transform: 'scaleY(0)',
+              animation: `growUp 0.5s cubic-bezier(0.22,1,0.36,1) ${0.25 + i * 0.05}s forwards`,
+            }}
+          />
+        );
+      })}
+    </svg>
+  );
+};
 
 const HitlSparkline = () => (
-  <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 28, paddingTop: 4 }}>
-    {Array.from({ length: 12 }).map((_, i) => (
-      <div key={i} style={{ flex: 1, height: '100%', background: '#EDE9FE', borderRadius: 3 }} />
-    ))}
-  </div>
+  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
+    <defs>
+      <linearGradient id="spk-hitl-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#7C3AED" stopOpacity="0.14" />
+        <stop offset="100%" stopColor="#7C3AED" stopOpacity="0" />
+      </linearGradient>
+    </defs>
+    <path className="sparkline-bar-path"
+      d="M0,24 L10,24 L10,18 L18,18 L18,24 L26,24 L26,14 L34,14 L34,24 L42,24 L42,10 L52,10 L52,24 L64,24"
+      fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+    />
+    <path
+      d="M0,24 L10,24 L10,18 L18,18 L18,24 L26,24 L26,14 L34,14 L34,24 L42,24 L42,10 L52,10 L52,24 L64,24 L64,28 L0,28Z"
+      fill="url(#spk-hitl-fill)"
+      style={{ opacity: 0, animation: 'fadeUp 0.4s ease 0.8s forwards' }}
+    />
+  </svg>
 );
+
+// ─── Metric card ──────────────────────────────────────────────────────────────
 
 interface MetricConfig {
   label: string;
-  value: string;
+  rawValue: number;
+  formatFn: (n: number) => string;
   sub: string;
   subColor: string;
-  accentBar: string;
   valueColor?: string;
+  borderGradientNormal: string;
+  borderGradientHover: string;
+  pulseColor: string;
   spark: React.ReactNode;
 }
 
-export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl, accent, cardRadius }: StatStripProps) {
-  const metrics: MetricConfig[] = [
+function MetricCard({ config, idx }: { config: MetricConfig; idx: number }) {
+  const [hovered, setHovered] = useState(false);
+  const animated = useCountUp(config.rawValue, 900, 150 + idx * 80);
+
+  const borderGrad = hovered ? config.borderGradientHover : config.borderGradientNormal;
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: `linear-gradient(#fff, #fff) padding-box, ${borderGrad} border-box`,
+        border: '1.5px solid transparent',
+        borderRadius: 20,
+        boxShadow: hovered
+          ? '0 1px 0 rgba(255,255,255,1) inset, 0 6px 20px rgba(0,0,0,0.09), 0 16px 40px rgba(0,0,0,0.08)'
+          : '0 1px 0 rgba(255,255,255,0.85) inset, 0 2px 8px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.04)',
+        padding: '20px 22px 16px',
+        transform: hovered ? 'translateY(-4px)' : 'none',
+        transition: 'transform 0.22s cubic-bezier(0.25,0.46,0.45,0.94), box-shadow 0.22s ease, background 0.22s ease',
+        animation: `fadeUp 0.4s ease ${idx * 0.08}s both`,
+      }}
+    >
+      {/* Label row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{
+          fontSize: 10, fontWeight: 700, color: '#9CA3AF',
+          textTransform: 'uppercase', letterSpacing: '0.1em',
+        }}>
+          {config.label}
+        </div>
+        <div style={{
+          width: 7, height: 7, borderRadius: '50%',
+          background: config.pulseColor,
+          flexShrink: 0,
+          transition: `box-shadow 0.2s ease, transform 0.2s ease`,
+          ...(hovered ? {
+            boxShadow: `0 0 0 4px ${config.pulseColor}25`,
+            transform: 'scale(1.2)',
+          } : {}),
+        }} />
+      </div>
+
+      {/* Animated value */}
+      <div style={{
+        fontSize: 30, fontWeight: 900,
+        color: config.valueColor ?? '#0F0F1A',
+        letterSpacing: '-1.5px', lineHeight: 1,
+        marginBottom: 10,
+        transition: 'color 0.2s ease',
+      }}>
+        {config.formatFn(animated)}
+      </div>
+
+      {/* Sparkline */}
+      <div style={{ marginBottom: 8 }}>{config.spark}</div>
+
+      {/* Sub label */}
+      <div style={{ fontSize: 11, color: config.subColor, fontWeight: 500, marginTop: 2 }}>
+        {config.sub}
+      </div>
+    </div>
+  );
+}
+
+// ─── Strip ────────────────────────────────────────────────────────────────────
+
+export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl }: StatStripProps) {
+  const configs: MetricConfig[] = [
     {
       label: 'Total Tokens',
-      value: formatTokens(tokens),
-      sub: '↑ tokens used today',
+      rawValue: tokens,
+      formatFn: (n) => formatTokens(n),
+      sub: `↑ ${formatTokens(tokens)} tokens used today`,
       subColor: '#22c55e',
-      accentBar: accent,
-      spark: <TokenSparkline color={accent} />,
+      borderGradientNormal: 'linear-gradient(135deg, #EC489935, #F9731618)',
+      borderGradientHover:  'linear-gradient(135deg, #EC489960, #F9731640)',
+      pulseColor: '#EC4899',
+      spark: <TokenSparkline />,
     },
     {
       label: 'Cost (USD)',
-      value: `$${costUsd.toFixed(4)}`,
+      rawValue: costUsd,
+      formatFn: (n) => `$${n.toFixed(4)}`,
       sub: '↑ 0.8% vs yesterday',
       subColor: '#22c55e',
-      accentBar: '#FBBF24',
       valueColor: '#D97706',
+      borderGradientNormal: 'linear-gradient(135deg, #F59E0B35, #FBBF2418)',
+      borderGradientHover:  'linear-gradient(135deg, #F59E0B60, #FBBF2440)',
+      pulseColor: '#F59E0B',
       spark: <CostSparkline />,
     },
     {
       label: 'LLM Calls',
-      value: String(llmCalls),
-      sub: `across active sessions`,
+      rawValue: llmCalls,
+      formatFn: (n) => String(Math.round(n)),
+      sub: 'Across active sessions',
       subColor: '#9CA3AF',
-      accentBar: '#06B6D4',
+      borderGradientNormal: 'linear-gradient(135deg, #06B6D435, #0EA5E918)',
+      borderGradientHover:  'linear-gradient(135deg, #06B6D460, #0EA5E940)',
+      pulseColor: '#06B6D4',
       spark: <LlmSparkline />,
     },
     {
       label: 'Pending HITL',
-      value: String(pendingHitl),
+      rawValue: pendingHitl,
+      formatFn: (n) => String(Math.round(n)),
       sub: pendingHitl === 0 ? 'No approvals needed' : `${pendingHitl} waiting`,
       subColor: pendingHitl === 0 ? '#22c55e' : '#ef4444',
-      accentBar: '#7C3AED',
+      borderGradientNormal: pendingHitl > 0
+        ? 'linear-gradient(135deg, #ef444435, #dc262618)'
+        : 'linear-gradient(135deg, #7C3AED35, #A855F718)',
+      borderGradientHover: pendingHitl > 0
+        ? 'linear-gradient(135deg, #ef444460, #dc262640)'
+        : 'linear-gradient(135deg, #7C3AED60, #A855F740)',
+      pulseColor: pendingHitl > 0 ? '#ef4444' : '#7C3AED',
       spark: <HitlSparkline />,
     },
   ];
 
   return (
     <div style={{
-      background: '#fff',
-      borderRadius: cardRadius,
-      border: '1px solid #EBEBF0',
-      boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
-      marginBottom: 18,
       display: 'grid',
       gridTemplateColumns: 'repeat(4, 1fr)',
+      gap: 12,
+      marginBottom: 16,
     }}>
-      {metrics.map(({ label, value, sub, subColor, accentBar, valueColor, spark }, idx) => (
-        <div key={label} style={{
-          padding: '18px 24px 16px',
-          borderRight: idx < 3 ? '1px solid #F0F0F5' : 'none',
-          position: 'relative',
-        }}>
-          {/* Colored accent bar at top */}
-          <div style={{
-            position: 'absolute', top: 0, left: 24, right: 24,
-            height: 2.5, borderRadius: '0 0 3px 3px',
-            background: accentBar, opacity: 0.75,
-          }} />
-          <div style={{
-            fontSize: 10, fontWeight: 700, color: '#9CA3AF',
-            textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8,
-          }}>
-            {label}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
-            <div style={{
-              fontSize: 28, fontWeight: 900,
-              color: valueColor ?? '#1a1a2e',
-              letterSpacing: '-1px', lineHeight: 1,
-            }}>
-              {value}
-            </div>
-            <div style={{ width: 72, flexShrink: 0 }}>{spark}</div>
-          </div>
-          <div style={{ fontSize: 11, color: subColor, fontWeight: 500, marginTop: 10 }}>{sub}</div>
-        </div>
+      {configs.map((config, idx) => (
+        <MetricCard key={config.label} config={config} idx={idx} />
       ))}
     </div>
   );

@@ -5,6 +5,12 @@
  * - Identity whitelist: only responds to TELEGRAM_USER_ID
  * - Sends agent responses as messages
  * - HITL: InlineKeyboard Approve / Reject buttons for Tier-3 actions
+ *
+ * MED-6 — SINGLE-TENANT BY DESIGN:
+ * Telegram uses a single TELEGRAM_USER_ID whitelist rather than per-user account
+ * resolution. Multi-tenant Telegram support (getUserByTelegramId) is not
+ * implemented. If you need multi-tenant Telegram, add a users.telegram_user_id
+ * column and mirror the Slack getUserBySlackUserId lookup pattern.
  */
 
 import { Bot, type Context } from 'grammy';
@@ -81,12 +87,23 @@ export function createTelegramBot(): Bot {
                     : 'continue previous investigation from the saved session. Resume from the latest unresolved finding and next step.';
             }
 
-            await runAgentLoop(
-                { sessionId, channel: 'telegram', userId, text: loopText, replyTarget: String(ctx.chat?.id ?? userId) },
-                onReply,
-                onApproval,
-                indicator
-            );
+            // CRIT-5: Hard 3-minute timeout per session
+            const controller = new AbortController();
+            const loopTimeout = setTimeout(() => {
+                controller.abort();
+                console.warn(`[Telegram] Session ${sessionId} hard-aborted after 3 minutes`);
+            }, 3 * 60 * 1000);
+
+            try {
+                await runAgentLoop(
+                    { sessionId, channel: 'telegram', userId, text: loopText, replyTarget: String(ctx.chat?.id ?? userId), signal: controller.signal },
+                    onReply,
+                    onApproval,
+                    indicator
+                );
+            } finally {
+                clearTimeout(loopTimeout);
+            }
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error(`[Telegram] Loop error:`, msg);

@@ -15,11 +15,13 @@ PM2 runs 1 worker (`instances: 1` in `ecosystem.config.cjs`). Memory restart thr
 ## Phase 1 — Completed ✅
 
 - Private HTTP gateway with authentication
+- HMAC-SHA256 gateway request signing (raw shared-secret bearer header removed)
 - Real-time streaming (SSE)
 - Auto user creation and plan tracking
 - Slack linking and shared sessions
 - Plan-tier speed limits (Starter: 10, Pro: 30, Business: 50 server actions)
-- Security hardening: body size limit, session isolation, error scrubbing, 5-minute bus timeout
+- Security hardening: body size limit, session isolation, usage endpoint tenant lock, error scrubbing, 5-minute bus timeout
+- Approval endpoint returns `202 Accepted` immediately and resumes execution in the background
 
 ---
 

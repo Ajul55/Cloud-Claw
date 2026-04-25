@@ -95,6 +95,13 @@ export function createSlackApp(): SlackAppInstance {
                     blocks: slackBlocks,
                 });
                 console.log('[slack] Approval card sent — ts:', result.ts);
+                // HIGH-8: Store channel + ts so expiry job can update the card
+                if (result.ts) {
+                    const { updateApprovalSlackInfo } = await import('../database/db.js');
+                    await updateApprovalSlackInfo(context.approvalId, channel, result.ts).catch(err =>
+                        console.warn('[slack] Failed to save Slack card info:', err)
+                    );
+                }
             } catch (err) {
                 console.error('[slack] FAILED to send approval card:', err);
                 await client.chat.postMessage({
@@ -135,8 +142,15 @@ export function createSlackApp(): SlackAppInstance {
                 return;
             }
 
+            // CRIT-5: Hard 3-minute timeout per session
+            const controller = new AbortController();
+            const loopTimeout = setTimeout(() => {
+                controller.abort();
+                console.warn(`[Slack] Session ${sessionId} hard-aborted after 3 minutes`);
+            }, 3 * 60 * 1000);
+
             const runLoop = () => runAgentLoop(
-                { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel },
+                { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel, signal: controller.signal },
                 onReply,
                 onApproval,
                 indicator
@@ -149,6 +163,7 @@ export function createSlackApp(): SlackAppInstance {
                     await runLoop();
                 }
             } finally {
+                clearTimeout(loopTimeout);
                 releaseSession(accountId);
             }
         } catch (err) {
@@ -459,8 +474,17 @@ export async function sendSlackMessage(channel: string, text: string): Promise<v
 function splitMessage(text: string, maxLen: number): string[] {
     if (text.length <= maxLen) return [text];
     const chunks: string[] = [];
-    for (let i = 0; i < text.length; i += maxLen) {
-        chunks.push(text.slice(i, i + maxLen));
+    let remaining = text;
+    while (remaining.length > maxLen) {
+        const slice = remaining.slice(0, maxLen);
+        const paraBreak = slice.lastIndexOf('\n\n');
+        const lineBreak = slice.lastIndexOf('\n');
+        const splitAt = paraBreak > maxLen / 2 ? paraBreak + 2
+                      : lineBreak > maxLen / 2 ? lineBreak + 1
+                      : maxLen;
+        chunks.push(remaining.slice(0, splitAt));
+        remaining = remaining.slice(splitAt);
     }
+    if (remaining.length > 0) chunks.push(remaining);
     return chunks;
 }

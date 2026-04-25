@@ -27,8 +27,9 @@ All SSH output is sanitized for prompt injection and credential leaks before it 
 - **Semantic fix memory**: past problem/fix pairs stored as vector embeddings (Voyage AI + pgvector) and retrieved at session start
 - **LLM provider-agnostic**: MiniMax M2.5, OpenAI, Anthropic (via LiteLLM proxy), or Groq — switchable at runtime
 - **Multi-tenant**: each Slack/Telegram user registers their own Cloudstick credentials; SSH keys stored AES-256-GCM encrypted
+- **Private Cloudstick gateway**: server-to-server HTTP/SSE integration signed with HMAC-SHA256, never a browser-exposed bearer key
 - **SSH certificate auth**: optional CA-signed short-lived certificates instead of long-lived private keys
-- **PM2 cluster**: two Node.js workers share one PostgreSQL session store for zero-downtime restarts
+- **Single-worker PM2 runtime**: intentionally pinned to one process until the in-memory SSE bus is replaced by Redis/RabbitMQ
 
 ---
 
@@ -54,9 +55,10 @@ npm install
 ```bash
 # Create the database and run the schema
 createdb cloudclaw
-psql cloudclaw -c "CREATE EXTENSION IF NOT EXISTS vector;"
 DATABASE_URL=postgresql://localhost/cloudclaw npm run db:init
 ```
+
+The schema creates the `vector` extension automatically. Your PostgreSQL user must have permission to run `CREATE EXTENSION`.
 
 ### Environment variables
 
@@ -93,6 +95,12 @@ CLOUDSTICK_API_KEY=
 CLOUDSTICK_API_SECRET=
 CLOUDSTICK_USER_ID=
 
+# ── Cloudstick Gateway (optional private HTTP API) ───────────────────────────
+# Generate with: openssl rand -hex 32
+# Used as the HMAC-SHA256 signing key for X-CloudClaw-Signature.
+CLOUDSTICK_GATEWAY_KEY=
+CLOUDSTICK_GATEWAY_SIGNATURE_TOLERANCE_SECONDS=300
+
 # ── Cloudflare ────────────────────────────────────────────────────────────────
 # CLOUDFLARE_API_TOKEN=
 # CLOUDFLARE_ZONE_ID=
@@ -125,7 +133,7 @@ DATABASE_URL=postgresql://localhost/cloudclaw
 npm run dev
 ```
 
-### Production (PM2 cluster, 2 workers)
+### Production (PM2, single worker)
 
 ```bash
 npm run build
@@ -133,6 +141,8 @@ pm2 start ecosystem.config.cjs --env production
 pm2 logs cloudclaw
 pm2 reload ecosystem.config.cjs   # zero-downtime restart
 ```
+
+The PM2 config uses one worker on purpose. The HTTP gateway currently keeps SSE streams and replay buffers in process memory, so multi-worker routing can strand a stream on the wrong worker. Move the SSE bus and background approval jobs to Redis/RabbitMQ before raising `instances`.
 
 ### Healthcheck
 
@@ -205,6 +215,20 @@ restart php-fpm on the web server
 ### Agent loop
 
 The core is `src/agents/loop.ts` — an LLM ↔ Tool ↔ HITL cycle with a 15-iteration guard. Each user message drives one loop invocation. Tool results feed back into the LLM context; Tier-3 results pause the loop and write to `approval_queue`.
+
+### Cloudstick gateway shift
+
+The private gateway no longer accepts a raw shared-secret bearer header. Cloudstick backend signs each request with HMAC-SHA256 using `CLOUDSTICK_GATEWAY_KEY`:
+
+```
+payload = METHOD + "\n" + PATH_WITH_QUERY + "\n" + TIMESTAMP + "\n" + RAW_BODY
+X-CloudClaw-Timestamp: <ISO timestamp>
+X-CloudClaw-Signature: sha256=<hex hmac>
+```
+
+Approval decisions now return `202 Accepted` immediately and continue the approved action in the background over the existing SSE stream. Usage reads are tenant-locked: `/api/usage/:accountId` only succeeds when `:accountId` matches `X-Cloudstick-Account-Id`.
+
+Credential context precedence is explicit: if a request already has an `AsyncLocalStorage` Cloudstick context, the agent loop preserves it. Otherwise, Slack/Telegram users are looked up from `users`; if no scoped user exists, Cloudstick API calls fall back to environment credentials for single-tenant deployments.
 
 ### 4-layer guard architecture
 
@@ -283,7 +307,7 @@ Tests use [Vitest](https://vitest.dev/). Guards and security modules are fully t
 
 ```bash
 # Run all tests
-npx vitest run
+npm test
 
 # Run a specific test file
 npx vitest run src/agents/tool_guard.test.ts

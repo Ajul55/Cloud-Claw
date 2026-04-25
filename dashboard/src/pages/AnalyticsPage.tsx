@@ -9,12 +9,11 @@ import { ChevronRight } from '../components/Icons';
 import type { StatsResponse, Range } from '../types';
 
 const ACCENT = '#EC4899';
-const CARD_RADIUS = 20;
 const card: React.CSSProperties = {
-  background: '#fff',
-  borderRadius: CARD_RADIUS,
-  border: '1px solid #EBEBF0',
-  boxShadow: '0 1px 6px rgba(0,0,0,0.05)',
+  background: 'linear-gradient(#fff, #fff) padding-box, linear-gradient(135deg, rgba(234,235,242,0.9), rgba(220,221,232,0.5)) border-box',
+  border: '1.5px solid transparent',
+  borderRadius: 20,
+  boxShadow: '0 1px 0 rgba(255,255,255,0.9) inset, 0 2px 8px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.04)',
 };
 
 interface Props {
@@ -27,11 +26,11 @@ export function AnalyticsPage({ data, range }: Props) {
 
   return (
     <>
-      <div style={{ marginBottom: 22 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#1a1a2e', letterSpacing: '-0.6px' }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ margin: 0, fontSize: 23, fontWeight: 800, color: '#0F0F1A', letterSpacing: '-0.7px' }}>
           AIOps Analytics
         </h1>
-        <p style={{ margin: '5px 0 0', fontSize: 12.5, color: '#9CA3AF' }}>
+        <p style={{ margin: '4px 0 0', fontSize: 12.5, color: '#9CA3AF' }}>
           Token usage, tool calls, cost and agent behaviour across all sessions
         </p>
       </div>
@@ -42,7 +41,7 @@ export function AnalyticsPage({ data, range }: Props) {
         llmCalls={totals.llmCalls}
         pendingHitl={totals.pendingHitl}
         accent={ACCENT}
-        cardRadius={CARD_RADIUS}
+        cardRadius={20}
       />
 
       <SystemHealthStrip
@@ -50,49 +49,51 @@ export function AnalyticsPage({ data, range }: Props) {
         memoryMb={data?.system?.memoryMb ?? 0}
         uptimeSeconds={data?.system?.uptimeSeconds ?? 0}
         llmConsecutiveErrors={data?.system?.llmConsecutiveErrors ?? 0}
-        cardRadius={CARD_RADIUS}
+        cardRadius={20}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.75fr', gap: 16, marginBottom: 18 }}>
-        <div style={{ ...card, padding: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.75fr', gap: 14, marginBottom: 16 }}>
+        <div style={{ ...card, padding: 24 }} className="premium-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e' }}>Token Burn Rate</div>
-              <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>Tokens per hour</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Token Burn Rate</div>
+              <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>Tokens per hour</div>
             </div>
-            <span style={{ fontSize: 11, color: '#9CA3AF', background: '#F6F6F9', padding: '4px 10px', borderRadius: 20, border: '1px solid #EBEBF0' }}>
-              Live
-            </span>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: 'rgba(0,0,0,0.04)', borderRadius: 20, padding: '4px 10px',
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'livePulse 2s ease infinite' }} />
+              <span style={{ fontSize: 10.5, color: '#6B7280', fontWeight: 500 }}>Live</span>
+            </div>
           </div>
           <div style={{ height: 220 }}>
             <BurnRateChart data={data?.burnRate ?? []} range={range} />
           </div>
         </div>
 
-        <div style={{ ...card, padding: 24, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e' }}>Top Tools</div>
-              <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>By call count</div>
-            </div>
+        <div style={{ ...card, padding: 24, display: 'flex', flexDirection: 'column' }} className="premium-card">
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Top Tools</div>
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>By call count</div>
           </div>
           <TopToolsChart data={data?.topTools ?? []} />
         </div>
 
-        <div style={{ ...card, padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: '100%', marginBottom: 14 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e' }}>Lane Split</div>
-            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>By session type</div>
+        <div style={{ ...card, padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center' }} className="premium-card">
+          <div style={{ width: '100%', marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Lane Split</div>
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>By session type</div>
           </div>
           <LaneSplitChart data={data?.laneSplit ?? []} />
         </div>
       </div>
 
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px 14px', borderBottom: '1px solid #F4F4F8' }}>
+      <div style={card} className="premium-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px 14px', borderBottom: '1px solid #F2F3F8' }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e' }}>Recent Sessions</div>
-            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>Latest agent activity</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Recent Sessions</div>
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>Latest agent activity</div>
           </div>
           <button style={{
             display: 'flex', alignItems: 'center', gap: 4,

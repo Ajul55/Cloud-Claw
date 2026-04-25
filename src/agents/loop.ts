@@ -51,6 +51,7 @@ import { touchSession } from '../jobs/timeout_sessions.js';
 import type { StatusIndicator } from '../utils/status_indicator.js';
 import { trackUsage } from '../telemetry/usage_tracker.js';
 import { recordLlmSuccess, recordLlmFailure } from '../telemetry/llm_health.js';
+import { recordLLMProviderSuccess, recordLLMProviderFailure } from '../llm/provider.js';
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import {
     getAllServers,
@@ -60,7 +61,7 @@ import {
     resolveAllServers,
     resolveServerFromMessage,
 } from '../utils/server_registry.js';
-import { runWithCloudstickContext } from '../api/cloudstick_context.js';
+import { getCloudstickUser, runWithCloudstickContext } from '../api/cloudstick_context.js';
 import { getUserByPlatformId, hasCloudstickCredentials } from '../services/user_service.js';
 import type {
     IncomingMessage,
@@ -86,6 +87,10 @@ import {
 export { type ToolReceipt, hasReceipt } from './session_manager.js';
 
 const MAX_ITERATIONS = 15;
+
+// CRIT-6: Per-session mutex — prevents concurrent loops on the same sessionId.
+// If a second message arrives while a loop is active, it waits for the first to finish.
+const _sessionMutex = new Map<string, Promise<void>>();
 
 // ─── Lazy load WRITE_TOOLS to prevent module init crashes ────────────────────
 let WRITE_TOOLS: Set<string> | null = null;
@@ -324,6 +329,11 @@ export async function runAgentLoop(
 ): Promise<void> {
     // W5: Resolve per-user credentials, then wrap entire loop in AsyncLocalStorage
     // so getCloudstickUser() is request-scoped (safe for concurrent requests).
+    const existingContextUser = getCloudstickUser();
+    if (existingContextUser) {
+        return _runAgentLoopCore(message, onReply, onApproval, indicator);
+    }
+
     let resolvedUser: Awaited<ReturnType<typeof getUserByPlatformId>> | null = null;
     try {
         const user = await getUserByPlatformId(message.channel, message.userId);
@@ -340,6 +350,30 @@ export async function runAgentLoop(
 }
 
 async function _runAgentLoopCore(
+    message: IncomingMessage,
+    onReply: ReplyFn,
+    onApproval: ApprovalFn,
+    indicator?: StatusIndicator
+): Promise<void> {
+    // CRIT-6: Session mutex — queue if another loop is active for this session
+    const existing = _sessionMutex.get(message.sessionId);
+    if (existing) {
+        console.log(`[loop] Session ${message.sessionId} busy — queuing message`);
+        await existing;
+    }
+    let _resolveMutex!: () => void;
+    const _mutexPromise = new Promise<void>(r => { _resolveMutex = r; });
+    _sessionMutex.set(message.sessionId, _mutexPromise);
+
+    try {
+        await _runAgentLoopBody(message, onReply, onApproval, indicator);
+    } finally {
+        _resolveMutex();
+        _sessionMutex.delete(message.sessionId);
+    }
+}
+
+async function _runAgentLoopBody(
     message: IncomingMessage,
     onReply: ReplyFn,
     onApproval: ApprovalFn,
@@ -548,7 +582,8 @@ async function _runAgentLoopCore(
         }
     }
 
-    const toolDefinitions = getLLMToolDefinitions();
+    // MED-12: Pass intent hint to limit tool list to relevant subset
+    const toolDefinitions = getLLMToolDefinitions(intent.toolHint !== 'none' ? intent.toolHint : undefined);
     // Fix #17: centralise canRequireTool guard
     const canRequireTool = toolDefinitions.length > 0;
 
@@ -640,6 +675,13 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
     }
 
     while (iteration < MAX_ITERATIONS) {
+        // CRIT-5: Hard timeout — abort signal set by Slack/Telegram caller
+        if (message.signal?.aborted) {
+            console.warn(`[loop] Aborted by timeout signal — session: ${message.sessionId}`);
+            await onReply('⏱️ Request timed out (3 min limit). Please try again.');
+            break;
+        }
+
         iteration++;
         console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
 
@@ -823,6 +865,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             choice = extractCompletionChoice(response);
             recordLlmSuccess();
+            recordLLMProviderSuccess();
 
             // Handle usage tracking
             const usage = response.usage;
@@ -843,6 +886,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             }
         } catch (err: any) {
             recordLlmFailure();
+            recordLLMProviderFailure();
             const msg = err instanceof Error ? err.message : String(err);
             console.error('[loop] LLM error:', msg);
             if (err.error?.failed_generation) {

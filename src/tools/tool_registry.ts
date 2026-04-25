@@ -292,8 +292,23 @@ export function getAllToolNames(): string[] {
     return ALL_TOOLS.map((t) => t.name);
 }
 
-/** Returns OpenAI-compatible function definitions for the LLM */
-export function getLLMToolDefinitions(): Array<{
+// MED-12: Tool groups keyed by intent toolHint — limits tokens sent to LLM per request
+const INTENT_TOOL_GROUPS: Record<string, string[]> = {
+    diagnose_nginx:      ['diagnose_nginx', 'fix_nginx_config', 'execute_ssh_command', 'get_server_details', 'create_nginx_vhost'],
+    diagnose_domain:     ['diagnose_domain', 'diagnose_nginx', 'renew_ssl', 'check_ssl_api', 'cloudflare_cache_purge', 'execute_ssh_command'],
+    diagnose_services:   ['diagnose_services', 'execute_ssh_command', 'manage_services', 'repair_mysql', 'manage_php', 'get_server_details'],
+    cloudflare_cache_purge: ['cloudflare_cache_purge', 'diagnose_domain', 'execute_ssh_command'],
+    check_cloudstick_connection: ['check_cloudstick_connection', 'get_cloudstick_websites', 'get_server_details'],
+    check_ssl_api:       ['check_ssl_api', 'renew_ssl', 'diagnose_domain'],
+    get_cloudstick_websites: ['get_cloudstick_websites', 'get_wordpress_details', 'get_server_details'],
+    get_server_details:  ['get_server_details', 'execute_ssh_command', 'diagnose_services'],
+    get_wordpress_details: ['get_wordpress_details', 'fix_wordpress', 'diagnose_nginx', 'execute_ssh_command'],
+    execute_ssh_command: ['execute_ssh_command', 'execute_ssh_write', 'get_server_details', 'diagnose_services'],
+};
+
+/** Returns OpenAI-compatible function definitions for the LLM.
+ *  Pass intentHint to limit the tool list to the most relevant subset. */
+export function getLLMToolDefinitions(intentHint?: string): Array<{
     type: 'function';
     function: {
         name: string;
@@ -301,7 +316,12 @@ export function getLLMToolDefinitions(): Array<{
         parameters: Record<string, unknown>;
     };
 }> {
-    return ALL_TOOLS.map((tool) => ({
+    let tools = ALL_TOOLS;
+    if (intentHint && intentHint !== 'none' && INTENT_TOOL_GROUPS[intentHint]) {
+        const allowed = new Set(INTENT_TOOL_GROUPS[intentHint]);
+        tools = ALL_TOOLS.filter(t => allowed.has(t.name));
+    }
+    return tools.map((tool) => ({
         type: 'function' as const,
         function: {
             name: tool.name,

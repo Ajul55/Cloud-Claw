@@ -19,7 +19,7 @@ A set of URLs (called an API) that Cloudstick's backend can call:
 
 ### A Lock on the Door (Security)
 
-Cloudstick's backend holds a secret password (64 characters, called `CLOUDSTICK_GATEWAY_KEY`). Every message they send must include this password. If it is wrong or missing, we reject the request immediately. **This password must never be shared with or visible to end users.**
+Cloudstick's backend holds a secret signing key (64 hex characters, called `CLOUDSTICK_GATEWAY_KEY`). Every request is signed with HMAC-SHA256 using the method, path, timestamp, and raw body. If the signature is wrong, missing, or too old, we reject the request immediately. **This key must never be shared with or visible to end users.**
 
 ### User Accounts (Auto-Created)
 
@@ -60,13 +60,14 @@ The gateway is designed for **server-to-server communication only** — Cloudsti
 
 | Protection | How it works |
 |---|---|
-| **Shared secret** | Every request must include the 64-char `CLOUDSTICK_GATEWAY_KEY` header. No key = instant 401. |
+| **HMAC signature** | Every request must include `X-CloudClaw-Timestamp` and `X-CloudClaw-Signature`. Bad or stale signatures get 401. |
 | **Session isolation** | Sessions are always keyed to the account ID. A user cannot access another account's session. |
+| **Usage isolation** | Usage reads require the URL account ID to match `X-Cloudstick-Account-Id`. |
 | **Body size limit** | Requests larger than 50 KB are rejected — prevents memory flood attacks. |
 | **Stream timeout** | If the AI takes longer than 5 minutes, the session is automatically closed. |
 | **Error scrubbing** | Internal error details (database messages, stack traces) are never sent to the API caller. |
 
 **What Cloudstick is responsible for:**
-- Storing the gateway key only on your backend server (never in frontend code or browser)
+- Storing the gateway signing key only on your backend server (never in frontend code or browser)
 - Sending the correct plan tier for each user — Cloud-Claw enforces limits based on what you report
 - Plan-gating users before calling Cloud-Claw (block users not on a qualifying plan)

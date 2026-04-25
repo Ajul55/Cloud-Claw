@@ -1,19 +1,12 @@
 /**
- * BurnRateChart — grounded, premium SVG bar chart
+ * BurnRateChart — premium bar chart with micro-interactions
  *
- * ROOT CAUSE of "floating bars":
- *   1. rx/ry rounds ALL 4 corners → bottom rounding visually lifts bars off baseline
- *   2. Animating SVG `y` + `height` attributes separately → they don't stay in sync
- *      during transition → bar bottom drifts up from baseline mid-animation
- *
- * FIXES:
- *   1. clipPath crops the chart area at the baseline → bottom rounding is hidden,
- *      bars appear flush to the floor
- *   2. Switched to transform: scaleY() + transform-box: fill-box +
- *      transform-origin: bottom → single-property animation, always grows
- *      from baseline, never floats
- *   3. Explicit baseline line (strokeWidth 1) anchors bars visually
- *   4. Y domain always [0, max], no auto-centering
+ * Interaction model:
+ *   • Bars grow from baseline on mount with staggered delay
+ *   • Hovered bar: scaleX expansion + glow increase
+ *   • Crosshair vertical hairline follows hovered bar
+ *   • Tooltip fades in with upward motion (via CSS keyframe)
+ *   • Peak bar always highlighted pink→orange
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -57,55 +50,49 @@ export function BurnRateChart({ data, range }: Props) {
   const [mounted, setMounted] = useState(false);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  // Tooltip key forces re-mount (re-animation) on each new bar hover
+  const [tooltipKey, setTooltipKey] = useState(0);
 
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 80);
     return () => clearTimeout(t);
   }, []);
 
-  // ── Data normalisation ──────────────────────────────────────────────────────
   const raw = data.length > 0
-    ? data.map(d => ({ raw: d.tokens,       label: formatLabel(d.bucket, range) }))
+    ? data.map(d => ({ raw: d.tokens, label: formatLabel(d.bucket, range) }))
     : PLACEHOLDER.map(d => ({ raw: d.ratio * 500_000, label: d.label }));
 
-  // Y domain always starts at 0
   const maxRaw = Math.max(...raw.map(d => d.raw), 1);
-  const bars   = raw.map(d => ({ ...d, ratio: d.raw / maxRaw }));  // ratio ∈ [0, 1]
-
+  const bars   = raw.map(d => ({ ...d, ratio: d.raw / maxRaw }));
   const peakIdx = bars.reduce((b, d, i) => (d.ratio > bars[b].ratio ? i : b), 0);
 
-  // ── SVG layout ──────────────────────────────────────────────────────────────
-  // viewBox units (not px)
+  // ── SVG layout — strictly aligned to container bounds ────────────────────────
   const VW = 100, VH = 100;
-  const PL = 9;   // left  — room for y-axis labels
-  const PR = 1;   // right
-  const PT = 4;   // top   — minimal headroom
-  const PB = 14;  // bottom — x-axis labels
+  const PL = 8, PR = 1, PT = 4, PB = 12;
+  const chartW   = VW - PL - PR;
+  const chartH   = VH - PT - PB;
+  const baseline = PT + chartH;
+  const barSlot  = chartW / bars.length;
+  // barW: medium width bars proportional to slot
+  const barW     = barSlot * 0.6; 
+  const barR     = barW * 0.35;
+  const yTicks   = [0, 0.25, 0.5, 0.75, 1.0];
 
-  const chartW    = VW - PL - PR;
-  const chartH    = VH - PT - PB;
-  const baseline  = PT + chartH;           // y-coordinate of the zero line
-  const barSlot   = chartW / bars.length;
-  const barW      = barSlot * 0.38;        // thin, elegant — 38 % of slot
-  const barR      = 3;                     // corner radius (top only, see clip)
-
-  // Y-axis: 4 grid lines at 0 %, 33 %, 66 %, 100 %
-  const yTicks = [0, 0.33, 0.66, 1.0];
-
-  // ── Tooltip positioning ─────────────────────────────────────────────────────
+  // ── Tooltip ─────────────────────────────────────────────────────────────────
   const handleBarEnter = (i: number, e: React.MouseEvent<SVGGElement>) => {
     if (!containerRef.current) return;
     const cRect   = containerRef.current.getBoundingClientRect();
     const svgEl   = e.currentTarget.closest('svg') as SVGSVGElement;
     const svgRect = svgEl.getBoundingClientRect();
-
+    // Use the middle of the slot for tooltips
     const barCX = svgRect.left + ((PL + i * barSlot + barSlot / 2) / VW) * svgRect.width;
     const barTY = svgRect.top  + ((baseline - bars[i].ratio * chartH) / VH) * svgRect.height;
 
     setHoveredIdx(i);
+    setTooltipKey(k => k + 1);
     setTooltip({
       x: barCX - cRect.left,
-      y: barTY - cRect.top - 10,
+      y: barTY - cRect.top - 8,
       value: formatTokenValue(bars[i].raw),
       label: bars[i].label,
     });
@@ -113,64 +100,76 @@ export function BurnRateChart({ data, range }: Props) {
 
   const handleBarLeave = () => { setHoveredIdx(null); setTooltip(null); };
 
+  // Crosshair x position in px (for the div overlay crosshair)
+  const crosshairX = hoveredIdx !== null && containerRef.current
+    ? (() => {
+        // We'll compute it on the SVG dimensions — approximate via ratio
+        return null; // computed inline below
+      })()
+    : null;
+  void crosshairX;
+
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
 
       <svg
         viewBox={`0 0 ${VW} ${VH}`}
-        style={{ width: '100%', height: '100%', overflow: 'visible' }}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: '100%', height: '100%', display: 'block', overflow: 'hidden' }}
       >
         <defs>
-          {/* ── FIX 1: clipPath at exact chart bounds ──────────────────────
-              Any part of a bar below `baseline` is clipped → bottom
-              rounded corners disappear → bars look flush to the floor.    */}
           <clipPath id="brc-clip">
             <rect x={PL} y={PT} width={chartW} height={chartH} />
           </clipPath>
 
-          {/* Gradients — single coral hue, 3-stop color shift (not opacity-only) */}
+          {/* Normal bar: pink→orange, semi-transparent base */}
           <linearGradient id="brc-g-normal" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="#F0856A" stopOpacity="0.95" />
-            <stop offset="55%"  stopColor="#E8622A" stopOpacity="0.72" />
-            <stop offset="100%" stopColor="#F0856A" stopOpacity="0.08" />
+            <stop offset="0%"   stopColor="#EC4899" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#F97316" stopOpacity="0.30" />
           </linearGradient>
 
+          {/* Hover bar: full intensity */}
           <linearGradient id="brc-g-hover" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="#FF9E7A" stopOpacity="1.00" />
-            <stop offset="50%"  stopColor="#F0856A" stopOpacity="0.88" />
-            <stop offset="100%" stopColor="#F0856A" stopOpacity="0.14" />
+            <stop offset="0%"   stopColor="#FF2D9B" stopOpacity="1.00" />
+            <stop offset="100%" stopColor="#FF7A20" stopOpacity="0.55" />
           </linearGradient>
 
+          {/* Peak bar: vivid, deepened orange at bottom */}
           <linearGradient id="brc-g-peak" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%"   stopColor="#EC4899" stopOpacity="1.00" />
-            <stop offset="55%"  stopColor="#F0856A" stopOpacity="0.82" />
-            <stop offset="100%" stopColor="#F0856A" stopOpacity="0.10" />
+            <stop offset="60%"  stopColor="#F97316" stopOpacity="0.90" />
+            <stop offset="100%" stopColor="#EA580C" stopOpacity="0.50" />
           </linearGradient>
 
           {/* Glow filters */}
-          <filter id="brc-glow" x="-60%" y="-30%" width="220%" height="160%">
-            <feGaussianBlur stdDeviation="1.6" result="b" />
+          <filter id="brc-glow" x="-80%" y="-40%" width="260%" height="180%">
+            <feGaussianBlur stdDeviation="1.8" result="b" />
             <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-          <filter id="brc-glow-peak" x="-80%" y="-40%" width="260%" height="180%">
-            <feGaussianBlur stdDeviation="2.6" result="b" />
+          <filter id="brc-glow-hover" x="-100%" y="-50%" width="300%" height="200%">
+            <feGaussianBlur stdDeviation="2.8" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <filter id="brc-glow-peak" x="-100%" y="-50%" width="300%" height="200%">
+            <feGaussianBlur stdDeviation="3.2" result="b" />
             <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
 
-        {/* ── Grid lines ── light hairlines, no dash, baseline solid ─────── */}
+        {/* Grid lines */}
         {yTicks.map((t) => {
-          const y   = baseline - t * chartH;          // y=baseline at t=0
-          const val = t === 0
-            ? '0'
-            : `${Math.round(t * maxRaw / 1000)}k`;
+          const y   = baseline - t * chartH;
+          const val = t === 0 ? '0' : `${Math.round(t * maxRaw / 1000)}k`;
           return (
             <g key={t}>
               <line
-                x1={PL} x2={PL + chartW}
-                y1={y}  y2={y}
+                x1={PL} x2={PL + chartW} y1={y} y2={y}
                 stroke={t === 0 ? '#C8C4DC' : '#EEECF6'}
                 strokeWidth={t === 0 ? 0.7 : 0.3}
+                style={t > 0 ? {
+                  opacity: 0,
+                  animation: `fadeUp 0.5s ease ${0.2 + t * 0.1}s forwards`,
+                } : {}}
               />
               <text
                 x={PL - 1.5} y={y + 1.4}
@@ -183,27 +182,43 @@ export function BurnRateChart({ data, range }: Props) {
           );
         })}
 
-        {/* ── Bars (inside clipPath) ──────────────────────────────────────── */}
+        {/* Y-axis left line removed for clean layout */}
+
+        {/* Crosshair hairline */}
+        {hoveredIdx !== null && (() => {
+          const cx = PL + hoveredIdx * barSlot + barSlot / 2;
+          return (
+            <line
+              x1={cx} x2={cx} y1={PT} y2={baseline}
+              stroke="#EC489930" strokeWidth="0.5"
+              strokeDasharray="2 2"
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        })()}
+
+        {/* Bars */}
         <g clipPath="url(#brc-clip)">
           {bars.map((d, i) => {
             const bh     = d.ratio * chartH;
             const x      = PL + i * barSlot + (barSlot - barW) / 2;
-            // Bar top-left: starts at baseline, extends up by bh.
-            // Add barR to height so the bottom rounded corners fall *below*
-            // the clip boundary and are invisible → only top corners show.
             const barTop = baseline - bh;
             const isHov  = hoveredIdx === i;
             const isPeak = i === peakIdx;
+
             const fill   = isHov    ? 'url(#brc-g-hover)'
                          : isPeak   ? 'url(#brc-g-peak)'
                          :            'url(#brc-g-normal)';
-            const filter = isPeak   ? 'url(#brc-glow-peak)'
-                         : isHov    ? 'url(#brc-glow)'
-                         :            'none';
+            const filter = isHov    ? 'url(#brc-glow-hover)'
+                         : isPeak   ? 'url(#brc-glow-peak)'
+                         :            'url(#brc-glow)';
 
             const showLabel = bars.length <= 8
               ? true
               : i % Math.ceil(bars.length / 6) === 0 || i === bars.length - 1;
+
+            // scaleX expands bar width on hover; scaleY is always 1 after mount
+            const scaleX = isHov ? 1.18 : 1;
 
             return (
               <g
@@ -212,40 +227,31 @@ export function BurnRateChart({ data, range }: Props) {
                 onMouseEnter={e => handleBarEnter(i, e)}
                 onMouseLeave={handleBarLeave}
               >
-                {/* ── FIX 2: scaleY from bottom instead of animating y+height ──
-                    transform-box:fill-box  → transform-origin is relative to
-                                              this element's own bounding box.
-                    transform-origin:bottom → scale pivot is the bar's bottom edge
-                                              (= the baseline), so it grows UP.
-                    scaleY(0→1)             → single property, always in sync,
-                                              bar bottom stays at baseline.       */}
                 <rect
                   x={x}
                   y={barTop}
                   width={barW}
-                  height={bh + barR}   // +barR pushed below clip → no bottom rounding visible
+                  height={bh + barR}
                   rx={barR}
                   ry={barR}
                   fill={fill}
                   filter={filter}
                   style={{
                     transformBox:    'fill-box',
-                    transformOrigin: 'bottom',
-                    transform:       `scaleY(${mounted ? 1 : 0})`,
+                    transformOrigin: 'bottom center',
+                    transform:       `scaleY(${mounted ? 1 : 0}) scaleX(${scaleX})`,
                     transition:      `transform 0.6s cubic-bezier(0.22,1,0.36,1) ${i * 0.035}s,
-                                      fill 0.15s ease`,
+                                      fill 0.18s ease,
+                                      filter 0.18s ease`,
                   }}
                 />
 
-                {/* Highlight cap — top 2px white sheen, only when visible */}
+                {/* Highlight cap */}
                 {mounted && bh > 3 && (
                   <rect
-                    x={x + 1}
-                    y={barTop + 0.5}
-                    width={barW - 2}
-                    height={1.8}
-                    rx={1.5}
-                    fill="rgba(255,255,255,0.4)"
+                    x={x + 1} y={barTop + 0.5}
+                    width={barW - 2} height={1.5} rx={1}
+                    fill={isHov ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.35)"}
                     style={{ pointerEvents: 'none' }}
                   />
                 )}
@@ -255,7 +261,9 @@ export function BurnRateChart({ data, range }: Props) {
                   <text
                     x={x + barW / 2} y={VH - 1.5}
                     textAnchor="middle" fontSize="2.6"
-                    fill="#B8B5C8" fontFamily="Geist,sans-serif"
+                    fill={isHov ? '#9B8FB0' : '#B8B5C8'}
+                    fontFamily="Geist,sans-serif"
+                    style={{ transition: 'fill 0.15s ease' }}
                   >
                     {d.label}
                   </text>
@@ -264,31 +272,35 @@ export function BurnRateChart({ data, range }: Props) {
             );
           })}
         </g>
-
-        {/* Strong baseline drawn ON TOP of bars so it's always crisp */}
+        {/* Subtle baseline */}
         <line
           x1={PL} x2={PL + chartW}
           y1={baseline} y2={baseline}
-          stroke="#C8C4DC" strokeWidth="0.7"
+          stroke="#EEECF6" strokeWidth="0.8"
         />
       </svg>
 
-      {/* ── HTML tooltip — stays readable at any zoom ───────────────────────── */}
+      {/* Tooltip — CSS fade-in on each hover */}
       {tooltip && (
-        <div style={{
-          position:      'absolute',
-          left:          tooltip.x,
-          top:           tooltip.y,
-          transform:     'translate(-50%, -100%)',
-          pointerEvents: 'none',
-          zIndex:        20,
-        }}>
+        <div
+          key={tooltipKey}
+          className="tooltip-popup"
+          style={{
+            position:      'absolute',
+            left:          tooltip.x,
+            top:           tooltip.y,
+            pointerEvents: 'none',
+            zIndex:        20,
+          }}
+        >
           <div style={{
-            background:   '#1a1a2e',
-            borderRadius: 8,
-            padding:      '6px 11px',
-            boxShadow:    '0 4px 18px rgba(0,0,0,0.28)',
+            background:   'rgba(15,15,26,0.92)',
+            backdropFilter: 'blur(8px)',
+            borderRadius: 9,
+            padding:      '7px 12px',
+            boxShadow:    '0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.06) inset',
             whiteSpace:   'nowrap',
+            border:       '1px solid rgba(255,255,255,0.08)',
           }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
               {tooltip.value}
@@ -301,7 +313,7 @@ export function BurnRateChart({ data, range }: Props) {
             width: 0, height: 0,
             borderLeft:  '5px solid transparent',
             borderRight: '5px solid transparent',
-            borderTop:   '5px solid #1a1a2e',
+            borderTop:   '5px solid rgba(15,15,26,0.92)',
             margin:      '0 auto',
           }} />
         </div>

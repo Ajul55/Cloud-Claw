@@ -15,6 +15,13 @@ import { getTotalActiveSessions } from './services/session_limiter.js';
 
 type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
 
+// MED-8: Readiness registry — index.ts marks services ready as they connect
+const readinessChecks = new Map<string, () => boolean>();
+
+export function registerReadinessCheck(name: string, check: () => boolean): void {
+    readinessChecks.set(name, check);
+}
+
 export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler): void {
     const server = http.createServer(async (req, res) => {
         // Dashboard routes (/api/stats and /dashboard/*) take priority
@@ -36,6 +43,17 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
                     res.end(JSON.stringify({ error: 'Internal server error' }));
                 }
             }
+            return;
+        }
+
+        if (req.url === '/ready') {
+            const failing: string[] = [];
+            for (const [name, check] of readinessChecks) {
+                if (!check()) failing.push(name);
+            }
+            const ready = failing.length === 0;
+            res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ready, failing: ready ? [] : failing }));
             return;
         }
 

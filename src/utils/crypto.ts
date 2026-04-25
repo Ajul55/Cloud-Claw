@@ -36,6 +36,12 @@ export function encrypt(plaintext: string): string {
  * The JWT payload looks like: {"user_id":48,"plan_id":1,"role":"customer",...}
  * We decode without verifying the signature — the API server handles that.
  *
+ * Trust boundary: signature verification is intentionally skipped here.
+ * This token comes from setup-time admin configuration (env var or DB row),
+ * not from an untrusted HTTP request. The private key that signed it is not
+ * available to the application layer — only the Cloudstick backend can verify
+ * it. We trust the value because it was written by an admin during onboarding.
+ *
  * @returns The numeric user_id from the JWT payload
  * @throws Error if the token is malformed or missing user_id
  */

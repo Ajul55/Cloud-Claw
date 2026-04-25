@@ -30,6 +30,8 @@ Message arrives
   → Context cleared at end of request
 ```
 
+Important production shift: request-scoped context wins. If the HTTP gateway or Slack bridge has already wrapped execution in `runWithCloudstickContext(user, ...)`, `runAgentLoop()` preserves that context instead of doing a second lookup and overwriting it. Only requests without an existing context fall back to the loop's platform/user lookup.
+
 ---
 
 ## Database: `users` Table
@@ -92,6 +94,16 @@ await runWithCloudstickContext(user, async () => {
 
 This guarantees **100% isolation** between concurrent user sessions within the same Node.js process, making the architecture fully safe for production multi-tenancy.
 
+### Credential Precedence
+
+Cloudstick API credentials are resolved in this order:
+
+1. Existing `AsyncLocalStorage` user context set by the request boundary.
+2. User lookup inside `runAgentLoop()` for Slack/Telegram direct messages.
+3. Environment variables (`CLOUDSTICK_API_KEY`, `CLOUDSTICK_API_SECRET`, `CLOUDSTICK_USER_ID`) for legacy single-tenant deployments.
+
+The gateway-created `cloudstick:<account_id>` session identity is always used for session isolation. Actual API credentials must come either from that request-scoped user context or from explicit environment fallback.
+
 ---
 
 ## Credential Encryption
@@ -140,6 +152,10 @@ When a Cloudstick business user chats via the HTTP gateway for the first time, t
 await upsertCloudstickUser(accountId, planTier);
 // Uses ON CONFLICT (cloudstick_account_id) DO UPDATE — safe under concurrent requests
 ```
+
+Gateway requests are authenticated with HMAC-SHA256, not a raw bearer key. Cloudstick backend signs the exact method, path, timestamp, and raw body using `CLOUDSTICK_GATEWAY_KEY`; Cloud-Claw rejects missing, stale, or invalid signatures.
+
+Gateway approval decisions are asynchronous: `POST /api/chat/:sessionId/approve` returns `202 Accepted`, then `resumeApprovedSession()` continues in the background and streams further chunks over SSE. This prevents the dashboard UI from hanging while a write tool runs.
 
 ---
 

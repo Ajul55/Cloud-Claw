@@ -17,7 +17,8 @@ Cloudstick Backend
         │
         │  POST /api/chat          ← forward the user's message
         │  GET  /api/chat/:id/stream  ← relay the live AI response
-        │  Header: X-CloudClaw-Key: <shared secret>
+        │  Headers: X-Cloudstick-Account-Id, X-Cloudstick-Plan,
+        │           X-CloudClaw-Timestamp, X-CloudClaw-Signature
         ▼
 Cloud-Claw (private — never exposed to the browser)
 ```
@@ -26,15 +27,49 @@ Cloud-Claw (private — never exposed to the browser)
 
 ## Authentication Headers
 
-Every request your backend sends to Cloud-Claw must include these three headers:
+Every request your backend sends to Cloud-Claw must include these headers:
 
 ```
-X-CloudClaw-Key: <the shared secret>
 X-Cloudstick-Account-Id: <your internal user/account ID>
 X-Cloudstick-Plan: starter        ← or "pro" or "business"
+X-CloudClaw-Timestamp: 2026-04-24T02:20:00.000Z
+X-CloudClaw-Signature: sha256=<hex HMAC signature>
 ```
 
 > **Important:** Read the plan from your database, not from the user's browser. Cloud-Claw trusts whatever plan you send — if you send `business` for a starter user, they get business-tier limits.
+
+### HMAC signing
+
+`CLOUDSTICK_GATEWAY_KEY` is a 64-character hex secret shared only by Cloudstick backend and Cloud-Claw. Never send the raw key as a request header.
+
+Sign the exact request with HMAC-SHA256:
+
+```text
+payload = METHOD + "\n" + PATH_WITH_QUERY + "\n" + TIMESTAMP + "\n" + RAW_BODY
+signature = hex(hmac_sha256(CLOUDSTICK_GATEWAY_KEY, payload))
+```
+
+Example:
+
+```typescript
+import crypto from 'node:crypto';
+
+function signCloudClawRequest(method: string, path: string, body: string, hexKey: string) {
+  const timestamp = new Date().toISOString();
+  const payload = `${method}\n${path}\n${timestamp}\n${body}`;
+  const signature = crypto
+    .createHmac('sha256', Buffer.from(hexKey, 'hex'))
+    .update(payload)
+    .digest('hex');
+
+  return {
+    'X-CloudClaw-Timestamp': timestamp,
+    'X-CloudClaw-Signature': `sha256=${signature}`,
+  };
+}
+```
+
+Cloud-Claw rejects requests outside the configured timestamp window, currently 5 minutes by default.
 
 ---
 
@@ -98,9 +133,9 @@ Or for a rejection with a reason:
 { "approvalId": 7, "decision": "reject", "reason": "Not the right time" }
 ```
 
-**Response:** `200 { "ok": true }`
+**Response:** `202 { "ok": true, "status": "accepted" }`
 
-After an approval, more `chunk` events will arrive on the still-open stream as the AI continues.
+After an approval, the HTTP request returns immediately. More `chunk` events arrive on the still-open stream as the AI continues in the background.
 
 ---
 
@@ -119,6 +154,14 @@ After this call, messages the user sends from Slack will share the same conversa
 
 **Error responses:**
 - `409` — This Slack user ID is already linked to a different account
+
+---
+
+### GET /api/usage/:accountId — Read monthly usage
+
+This endpoint requires the same HMAC headers and the same `X-Cloudstick-Account-Id`.
+
+Cloud-Claw rejects the request with `403` unless the account in the URL exactly matches `X-Cloudstick-Account-Id`. Do not use the browser-provided account ID when calling this endpoint; derive it from your authenticated backend session.
 
 ---
 

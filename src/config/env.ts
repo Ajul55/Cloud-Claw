@@ -8,6 +8,8 @@ const EnvSchema = z.object({
     LLM_BASE_URL: z.string().url().optional(),
     LLM_MODEL: z.string().default('gpt-4o'),
     LLM_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).default('openai'),
+    // HIGH-9: Optional fallback provider activated by circuit breaker after 3 failures
+    LLM_FALLBACK_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).optional(),
 
     // Additional API keys for switching
     ANTHROPIC_API_KEY: z.string().optional(),
@@ -66,8 +68,10 @@ const EnvSchema = z.object({
         z.string().regex(/^[0-9a-fA-F]{64}$/, 'Must be 64 hex characters (32 bytes)').optional()
     ),
 
-    // Cloudstick gateway shared secret — 64-char hex
+    // Cloudstick gateway shared secret — 64-char hex.
+    // Used as the HMAC-SHA256 signing key for server-to-server gateway requests.
     CLOUDSTICK_GATEWAY_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().regex(/^[0-9a-f]{64}$/).optional()),
+    CLOUDSTICK_GATEWAY_SIGNATURE_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
 
     // CORS: allowed origin for the HTTP gateway (e.g. https://app.cloudstick.io)
     // Set to '*' during development. Omit or leave empty to deny all cross-origin requests.

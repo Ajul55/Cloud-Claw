@@ -10,6 +10,28 @@ export interface LLMConfig {
 let globalProviderOverride: string | undefined;
 let globalModelOverride: string | undefined;
 
+// HIGH-9: Circuit breaker — auto-fallback after 3 consecutive LLM failures
+let _consecutiveFailures = 0;
+let _fallbackUntil = 0;
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+const FALLBACK_DURATION_MS = 5 * 60 * 1000;
+
+export function recordLLMProviderSuccess(): void {
+    _consecutiveFailures = 0;
+}
+
+export function recordLLMProviderFailure(): void {
+    _consecutiveFailures++;
+    if (_consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+        _fallbackUntil = Date.now() + FALLBACK_DURATION_MS;
+        console.warn(`[provider] Circuit breaker tripped after ${_consecutiveFailures} failures — using fallback for 5 min`);
+    }
+}
+
+export function isUsingFallback(): boolean {
+    return _fallbackUntil > 0 && Date.now() < _fallbackUntil;
+}
+
 export function setGlobalLLMOverride(provider: string, model: string) {
     globalProviderOverride = provider;
     globalModelOverride = model;
@@ -23,7 +45,14 @@ export function getCurrentLLMConfig() {
 }
 
 export function getLLMClient(): LLMConfig {
-    const provider = (globalProviderOverride || env.LLM_PROVIDER).toLowerCase();
+    // HIGH-9: If circuit breaker tripped and a fallback is configured, use it
+    const isFallback = isUsingFallback() && !!env.LLM_FALLBACK_PROVIDER;
+    const provider = isFallback
+        ? env.LLM_FALLBACK_PROVIDER!.toLowerCase()
+        : (globalProviderOverride || env.LLM_PROVIDER).toLowerCase();
+    if (isFallback) {
+        console.log(`[provider] Using fallback provider: ${provider}`);
+    }
 
     let apiKey = env.LLM_API_KEY;
     let baseURL = env.LLM_BASE_URL;

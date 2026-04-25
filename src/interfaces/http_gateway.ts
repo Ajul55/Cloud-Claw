@@ -1,16 +1,37 @@
 import http from 'http';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
+import { z } from 'zod';
 import { EventEmitter } from 'events';
 import { env } from '../config/env.js';
-import { upsertCloudstickUser, linkSlackToCloudstickUser } from '../services/user_service.js';
+import { getUserByCloudstickAccountId, upsertCloudstickUser, linkSlackToCloudstickUser } from '../services/user_service.js';
 import { runAgentLoop } from '../agents/loop.js';
 import { resumeApprovedSession } from '../hitl/resume.js';
 import { runWithCloudstickContext } from '../api/cloudstick_context.js';
 import { acquireSession, releaseSession, isMonthlyCapReached } from '../services/session_limiter.js';
 import { getPool, isDBConfigured } from '../database/db.js';
+import { logger } from '../telemetry/logger.js';
 import type { ReplyFn, ApprovalFn, IncomingMessage } from '../tools/types.js';
 
 type PlanTier = 'starter' | 'pro' | 'business';
 const VALID_PLANS = new Set<string>(['starter', 'pro', 'business']);
+
+// HIGH-2: Per-account rate limiter — sliding window, no external package needed
+const RATE_LIMITS: Record<string, number> = { starter: 10, pro: 30, business: 60 };
+const _rateCounts = new Map<string, { count: number; windowStart: number }>();
+const RATE_WINDOW_MS = 60_000;
+
+function checkRateLimit(accountId: string, plan: string): boolean {
+    const limit = RATE_LIMITS[plan] ?? 10;
+    const now = Date.now();
+    const entry = _rateCounts.get(accountId);
+    if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+        _rateCounts.set(accountId, { count: 1, windowStart: now });
+        return true;
+    }
+    if (entry.count >= limit) return false;
+    entry.count++;
+    return true;
+}
 
 // Per-session SSE event bus
 const sessionBus = new Map<string, EventEmitter>();
@@ -101,7 +122,7 @@ function getCorsHeaders(): Record<string, string> {
     return {
         'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, X-Cloudstick-Account-Id, X-Cloudstick-Plan, X-Cloudclaw-Key',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Cloudstick-Account-Id, X-Cloudstick-Plan, X-Cloudclaw-Timestamp, X-Cloudclaw-Signature',
         'Access-Control-Max-Age': '86400',
     };
 }
@@ -111,20 +132,81 @@ function json(res: http.ServerResponse, status: number, body: object): void {
     res.end(JSON.stringify(body));
 }
 
+function getHeader(req: http.IncomingMessage, name: string): string | undefined {
+    const raw = req.headers[name.toLowerCase()];
+    if (Array.isArray(raw)) return raw[0];
+    return raw;
+}
+
+function verifyGatewayAuth(req: http.IncomingMessage, body: string, requestId: string): { ok: true } | { ok: false; status: number; error: string } {
+    const key = env.CLOUDSTICK_GATEWAY_KEY;
+    if (!key) return { ok: false, status: 503, error: 'Gateway not configured' };
+
+    const timestamp = getHeader(req, 'x-cloudclaw-timestamp');
+    const signature = getHeader(req, 'x-cloudclaw-signature');
+    if (!timestamp || !signature) {
+        logger.warn('gateway_auth_missing_signature', { module: 'gateway', event: 'auth_missing_signature', requestId });
+        return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+
+    const timestampMs = Date.parse(timestamp);
+    if (!Number.isFinite(timestampMs)) {
+        return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+
+    const skewMs = Math.abs(Date.now() - timestampMs);
+    if (skewMs > env.CLOUDSTICK_GATEWAY_SIGNATURE_TOLERANCE_SECONDS * 1000) {
+        logger.warn('gateway_auth_timestamp_outside_window', { module: 'gateway', event: 'auth_stale_timestamp', requestId, skewMs });
+        return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+
+    const method = req.method ?? '';
+    const path = req.url ?? '';
+    const payload = `${method}\n${path}\n${timestamp}\n${body}`;
+    const expected = createHmac('sha256', Buffer.from(key, 'hex')).update(payload).digest('hex');
+
+    const provided = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;
+    if (!/^[a-f0-9]{64}$/i.test(provided)) {
+        return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    const providedBuffer = Buffer.from(provided, 'hex');
+    if (providedBuffer.length !== expectedBuffer.length || !timingSafeEqual(providedBuffer, expectedBuffer)) {
+        logger.warn('gateway_auth_bad_signature', { module: 'gateway', event: 'auth_bad_signature', requestId });
+        return { ok: false, status: 401, error: 'Unauthorized' };
+    }
+
+    return { ok: true };
+}
+
+// ── HIGH-7: Request body schemas ────────────────────────────────────────────
+const PostChatSchema = z.object({
+    message: z.string().min(1).max(4000),
+    sessionId: z.string().optional(),
+});
+
+const PostApproveSchema = z.object({
+    approved: z.boolean(),
+    reason: z.string().max(500).optional(),
+});
+
 // ── Route handlers ────────────────────────────────────────────────────────────
 
-async function handlePostChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function handlePostChat(req: http.IncomingMessage, res: http.ServerResponse, body: string, requestId: string): Promise<void> {
     const accountId = req.headers['x-cloudstick-account-id'] as string | undefined;
     const plan = req.headers['x-cloudstick-plan'] as string | undefined;
 
     if (!accountId) return json(res, 400, { error: 'Missing header: X-Cloudstick-Account-Id' });
     if (!plan || !VALID_PLANS.has(plan)) return json(res, 400, { error: 'Missing or invalid header: X-Cloudstick-Plan (starter|pro|business)' });
+    if (!checkRateLimit(accountId, plan)) return json(res, 429, { error: 'RATE_LIMITED', message: `Too many requests. Limit: ${RATE_LIMITS[plan] ?? 10} req/min.` });
 
-    let parsed: { message?: string };
-    try { parsed = JSON.parse(await readBody(req)); }
-    catch { return json(res, 400, { error: 'Invalid JSON body' }); }
-
-    if (!parsed.message?.trim()) return json(res, 400, { error: 'Required field: message' });
+    let parsed: z.infer<typeof PostChatSchema>;
+    try {
+        parsed = PostChatSchema.parse(JSON.parse(body));
+    } catch {
+        return json(res, 400, { error: 'Invalid request body. Required: { message: string (1-4000 chars) }' });
+    }
 
     const sessionId = `cloudstick:${accountId}`;
     const user = await upsertCloudstickUser(accountId, plan);
@@ -137,7 +219,7 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
         sessionId,
         channel: 'cloudstick',
         userId: accountId,
-        text: parsed.message.trim(),
+        text: parsed.message,
         planTier: plan as PlanTier,
     };
 
@@ -169,11 +251,13 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
         .then(() => { clearTimeout(sessionTimeout); emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
         .catch((err: Error) => {
             clearTimeout(sessionTimeout);
-            console.error('[gateway] Agent loop error for session', sessionId, ':', err);
+            logger.error('gateway_agent_loop_failed', err, { module: 'gateway', event: 'agent_loop_failed', requestId, sessionId, accountId });
             emitSSE(sessionId, 'error', { message: 'An error occurred processing your request.' });
             closeBus(sessionId);
         })
         .finally(() => { releaseSession(accountId); });
+
+    logger.info('gateway_chat_accepted', { module: 'gateway', event: 'chat_accepted', requestId, sessionId, accountId, plan });
 
     json(res, 202, {
         sessionId,
@@ -225,7 +309,7 @@ function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessi
     req.on('close', () => { bus.off('sse', onEvent); bus.off('close', onClose); });
 }
 
-async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
+async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, body: string, requestId: string): Promise<void> {
     const accountId = req.headers['x-cloudstick-account-id'] as string | undefined;
 
     // SECURITY: Require accountId header — empty string is not a valid tenant identity
@@ -241,38 +325,56 @@ async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse
         return json(res, 403, { error: 'Forbidden' });
     }
 
-    let parsed: { approvalId?: unknown; decision?: unknown; reason?: unknown };
-    try { parsed = JSON.parse(await readBody(req)); }
-    catch { return json(res, 400, { error: 'Invalid JSON body' }); }
-
-    const { approvalId, decision, reason } = parsed;
-    if (typeof approvalId !== 'number' || (decision !== 'approve' && decision !== 'reject')) {
-        return json(res, 400, { error: 'Required: approvalId (number), decision ("approve"|"reject")' });
+    const ApproveBodySchema = z.object({
+        approvalId: z.number().int().positive(),
+        decision: z.enum(['approve', 'reject']),
+        reason: z.string().max(500).optional(),
+    });
+    let parsed: z.infer<typeof ApproveBodySchema>;
+    try {
+        parsed = ApproveBodySchema.parse(JSON.parse(body));
+    } catch {
+        return json(res, 400, { error: 'Invalid request body. Required: { approvalId: number, decision: "approve"|"reject" }' });
     }
+    const { approvalId, decision, reason } = parsed;
 
     const onReply: ReplyFn = async (text) => emitSSE(sessionId, 'chunk', { text });
     const onApproval: ApprovalFn = async ({ approvalId: id, command, targetHost, rationale }) =>
         emitSSE(sessionId, 'approval_required', { approvalId: id, action: command, host: targetHost, rationale });
 
-    await resumeApprovedSession(
+    const cloudstickUser = await getUserByCloudstickAccountId(accountId);
+    const approvalTimeout = setTimeout(() => {
+        logger.warn('gateway_approval_resume_timeout', { module: 'gateway', event: 'approval_resume_timeout', requestId, sessionId, accountId, approvalId });
+        emitSSE(sessionId, 'error', { message: 'Approval processing timed out.' });
+        closeBus(sessionId);
+    }, 5 * 60 * 1000);
+
+    Promise.resolve(runWithCloudstickContext(cloudstickUser, () => resumeApprovedSession(
         approvalId,
         decision === 'approve',
         accountId,
         onReply,
         onApproval,
         typeof reason === 'string' ? reason : undefined,
-    );
+    )))
+        .then(() => { clearTimeout(approvalTimeout); emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
+        .catch((err: Error) => {
+            clearTimeout(approvalTimeout);
+            logger.error('gateway_approval_resume_failed', err, { module: 'gateway', event: 'approval_resume_failed', requestId, sessionId, accountId, approvalId });
+            emitSSE(sessionId, 'error', { message: 'An error occurred processing the approval.' });
+            closeBus(sessionId);
+        });
 
-    if (decision === 'approve') { emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); }
-    json(res, 200, { ok: true });
+    logger.info('gateway_approval_accepted', { module: 'gateway', event: 'approval_accepted', requestId, sessionId, accountId, approvalId, decision });
+    json(res, 202, { ok: true, status: 'accepted' });
 }
 
-async function handleSlackLink(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function handleSlackLink(req: http.IncomingMessage, res: http.ServerResponse, body: string, requestId: string): Promise<void> {
     const accountId = req.headers['x-cloudstick-account-id'] as string | undefined;
     if (!accountId) return json(res, 400, { error: 'Missing header: X-Cloudstick-Account-Id' });
 
     let parsed: { slackUserId?: unknown; slackWorkspaceId?: unknown };
-    try { parsed = JSON.parse(await readBody(req)); }
+    try { parsed = JSON.parse(body); }
     catch { return json(res, 400, { error: 'Invalid JSON body' }); }
 
     if (typeof parsed.slackUserId !== 'string' || !parsed.slackUserId) {
@@ -291,10 +393,15 @@ async function handleSlackLink(req: http.IncomingMessage, res: http.ServerRespon
         }
         throw err;
     }
+    logger.info('gateway_slack_linked', { module: 'gateway', event: 'slack_linked', requestId, accountId, slackUserId: parsed.slackUserId });
     json(res, 200, { linked: true });
 }
 
 async function handleGetUsage(req: http.IncomingMessage, res: http.ServerResponse, accountId: string): Promise<void> {
+    const headerAccountId = req.headers['x-cloudstick-account-id'] as string | undefined;
+    if (!headerAccountId) return json(res, 401, { error: 'Missing header: X-Cloudstick-Account-Id' });
+    if (headerAccountId !== accountId) return json(res, 403, { error: 'Forbidden' });
+
     const urlObj = new URL(req.url ?? '', 'http://localhost');
     const periodParam = urlObj.searchParams.get('period');
 
@@ -343,7 +450,7 @@ async function handleGetUsage(req: http.IncomingMessage, res: http.ServerRespons
             serverActions: parseInt(row?.server_actions ?? '0', 10),
         });
     } catch (err) {
-        console.error('[gateway] Usage query failed:', err);
+        logger.error('gateway_usage_query_failed', err, { module: 'gateway', event: 'usage_query_failed', accountId });
         return json(res, 500, { error: 'Failed to fetch usage data.' });
     }
 }
@@ -352,6 +459,7 @@ async function handleGetUsage(req: http.IncomingMessage, res: http.ServerRespons
 
 export function createGatewayHandler(): (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> {
     return async (req, res) => {
+        const requestId = getHeader(req, 'x-request-id') ?? randomUUID();
         // ── CORS preflight ────────────────────────────────────────────────────
         if (req.method === 'OPTIONS') {
             const cors = getCorsHeaders();
@@ -364,15 +472,26 @@ export function createGatewayHandler(): (req: http.IncomingMessage, res: http.Se
             return;
         }
 
-        if (req.headers['x-cloudclaw-key'] !== env.CLOUDSTICK_GATEWAY_KEY) {
-            return json(res, 401, { error: 'Unauthorized' });
+        let body = '';
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            try {
+                body = await readBody(req);
+            } catch (err) {
+                logger.warn('gateway_body_read_failed', { module: 'gateway', event: 'body_read_failed', requestId, error: err instanceof Error ? err.message : String(err) });
+                return json(res, 413, { error: 'Request body too large' });
+            }
+        }
+
+        const auth = verifyGatewayAuth(req, body, requestId);
+        if (!auth.ok) {
+            return json(res, auth.status, { error: auth.error });
         }
 
         const url = req.url ?? '';
         const method = req.method ?? '';
 
         if (method === 'POST' && url === '/api/chat') {
-            return handlePostChat(req, res);
+            return handlePostChat(req, res, body, requestId);
         }
 
         const streamMatch = url.match(/^\/api\/chat\/([^/]+)\/stream$/);
@@ -392,11 +511,11 @@ export function createGatewayHandler(): (req: http.IncomingMessage, res: http.Se
 
         const approveMatch = url.match(/^\/api\/chat\/([^/]+)\/approve$/);
         if (method === 'POST' && approveMatch) {
-            return handleApprove(req, res, decodeURIComponent(approveMatch[1]));
+            return handleApprove(req, res, decodeURIComponent(approveMatch[1]), body, requestId);
         }
 
         if (method === 'POST' && url === '/api/slack/link') {
-            return handleSlackLink(req, res);
+            return handleSlackLink(req, res, body, requestId);
         }
 
         const usageMatch = url.match(/^\/api\/usage\/([^/]+)$/);

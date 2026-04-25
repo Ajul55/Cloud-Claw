@@ -1,6 +1,6 @@
 export type Range = '24h' | '7d' | '30d';
 
-export type NavPage = 'Dashboard' | 'Analytics' | 'Sessions' | 'Tools' | 'Servers' | 'Settings' | 'Help';
+export type NavPage = 'Dashboard' | 'Sessions' | 'Tools' | 'Servers' | 'Settings' | 'Help';
 
 export interface StatsResponse {
   range: Range;

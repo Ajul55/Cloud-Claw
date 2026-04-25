@@ -34,6 +34,9 @@ const MAX_CONNECTIONS_PER_HOST = 2;
 
 const connectionPool = new Map<string, PooledConnection[]>();
 
+// Per-host queue of resolve callbacks waiting for a free connection slot
+const _waitQueue = new Map<string, Array<() => void>>();
+
 function poolKey(host: string, port: number, user: string): string {
     return `${user}@${host}:${port}`;
 }
@@ -46,6 +49,11 @@ function releaseConnection(host: string, port: number, user: string, conn: SSHCl
     if (pooled) {
         pooled.inUse = false;
         pooled.lastUsed = Date.now();
+    }
+    // Wake the next waiter immediately instead of making it poll
+    const queue = _waitQueue.get(hostKey);
+    if (queue && queue.length > 0) {
+        queue.shift()!();
     }
 }
 
@@ -95,30 +103,35 @@ async function getPooledConnection(
         }
     }
 
-    // Need a new connection — respect per-host limit
-    // Wait iteratively for a slot — no recursion, bounded by MAX_WAIT_MS
-    const MAX_WAIT_MS = 30_000;
-    const POLL_INTERVAL_MS = 100;
-    let waited = 0;
-
-    while (pool.length >= MAX_CONNECTIONS_PER_HOST) {
-        // Re-check for a newly freed slot before waiting
+    // Need a new connection — respect per-host limit via promise queue (no polling)
+    while ((connectionPool.get(hostKey) ?? []).length >= MAX_CONNECTIONS_PER_HOST) {
+        // Check if a slot just freed before queuing
         cleanupPool(hostKey);
         const freshPool = connectionPool.get(hostKey) ?? [];
         const free = freshPool.find(p => !p.inUse);
         if (free) {
             free.inUse = true;
             free.lastUsed = Date.now();
-            console.log(`[ssh] Reusing freed connection for ${hostKey} (waited ${waited}ms)`);
+            console.log(`[ssh] Reusing freed connection for ${hostKey}`);
             return free.conn;
         }
 
-        if (waited >= MAX_WAIT_MS) {
-            throw new Error(`[ssh] Pool exhausted for ${hostKey} — all ${MAX_CONNECTIONS_PER_HOST} connections busy for ${MAX_WAIT_MS}ms`);
-        }
-
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-        waited += POLL_INTERVAL_MS;
+        // Park this caller until releaseConnection() wakes it
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                const q = _waitQueue.get(hostKey);
+                if (q) {
+                    const i = q.indexOf(wakeup);
+                    if (i !== -1) q.splice(i, 1);
+                }
+                reject(new Error(`[ssh] Pool exhausted for ${hostKey} — all ${MAX_CONNECTIONS_PER_HOST} connections busy for 30s`));
+            }, 30_000);
+            const wakeup = () => { clearTimeout(timer); resolve(); };
+            const q = _waitQueue.get(hostKey) ?? [];
+            q.push(wakeup);
+            _waitQueue.set(hostKey, q);
+        });
+        cleanupPool(hostKey);
     }
 
     console.log(`[ssh] Creating new SSH connection for ${hostKey}`);
@@ -148,6 +161,10 @@ function connectSSH(
             if (certificate) {
                 console.log(`[ssh] Connected to ${host}:${port} using SSH certificate`);
             }
+            const hostKey = `${host}:${port}`;
+            // Self-evict on keepalive failure or unexpected close
+            conn.on('end', () => evictConnection(conn, hostKey));
+            conn.on('error', () => evictConnection(conn, hostKey));
             resolve(conn);
         });
         conn.on('error', (err) => {
@@ -162,6 +179,8 @@ function connectSSH(
             username: user,
             privateKey: key,
             readyTimeout: 10_000,
+            keepaliveInterval: 10_000,
+            keepaliveCountMax: 3,
         };
         if (certificate) {
             (connectOpts as any).certificate = certificate;
@@ -171,12 +190,24 @@ function connectSSH(
     });
 }
 
+/** Evict a connection from its pool slot (called on keepalive failure / end). */
+function evictConnection(conn: SSHClient, hostKey: string): void {
+    const pool = connectionPool.get(hostKey);
+    if (!pool) return;
+    const idx = pool.findIndex(p => p.conn === conn);
+    if (idx !== -1) {
+        pool.splice(idx, 1);
+        console.log(`[ssh] Evicted dead connection for ${hostKey} (${pool.length} remaining)`);
+    }
+}
+
 // Periodic pool cleanup — run every 30 seconds
-setInterval(() => {
+const _poolCleanupInterval = setInterval(() => {
     for (const hostKey of connectionPool.keys()) {
         cleanupPool(hostKey);
     }
 }, 30_000);
+_poolCleanupInterval.unref();
 
 const RETRYABLE_ERRORS = [
     'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET',
@@ -294,19 +325,34 @@ async function executeSSHCommand(
                 releaseConnection(host, port, user, conn);
                 return reject(err);
             }
+            let outputBytes = 0;
+            let outputTruncated = false;
             stream
                 .on('close', () => {
                     clearTimeout(timer);
                     releaseConnection(host, port, user, conn);
-                    if (output.length > MAX_OUTPUT_BYTES) {
-                        output = output.slice(0, MAX_OUTPUT_BYTES) + '\n...[truncated at 50KB]';
-                    }
                     resolve(output.trim());
                 })
                 .on('data', (data: Buffer) => {
+                    if (outputTruncated) return;
+                    outputBytes += data.byteLength;
+                    if (outputBytes > MAX_OUTPUT_BYTES) {
+                        outputTruncated = true;
+                        output += '\n...[truncated at 50KB]';
+                        stream.pause();
+                        return;
+                    }
                     output += data.toString();
                 })
                 .stderr.on('data', (data: Buffer) => {
+                    if (outputTruncated) return;
+                    outputBytes += data.byteLength;
+                    if (outputBytes > MAX_OUTPUT_BYTES) {
+                        outputTruncated = true;
+                        output += '\n...[truncated at 50KB]';
+                        stream.pause();
+                        return;
+                    }
                     output += data.toString();
                 });
         });

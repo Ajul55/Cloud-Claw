@@ -9,6 +9,7 @@
     "build:dashboard": "cd dashboard && npm run build",
     "start": "npm run build:dashboard && npm run build && node dist/src/index.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --dir src",
     "db:init": "psql $DATABASE_URL -f src/database/schema.sql"
   },
   "dependencies": {
@@ -20,7 +21,6 @@
     "node-cron": "^4.2.1",
     "openai": "^4.80.0",
     "pg": "^8.20.0",
-    "pg-boss": "^12.15.0",
     "pgvector": "^0.2.0",
     "ssh2": "^1.16.0",
     "ws": "^8.20.0",

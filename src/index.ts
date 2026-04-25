@@ -15,7 +15,7 @@ import { createSlackApp, startSlackApp } from './interfaces/slack.js';
 import { expireStaleApprovals } from './jobs/expire_approvals.js';
 import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
-import { startHealthServer } from './health.js';
+import { startHealthServer, registerReadinessCheck } from './health.js';
 import { startAlertScheduler } from './telemetry/ops_alerts.js';
 import { createGatewayHandler } from './interfaces/http_gateway.js';
 
@@ -27,10 +27,27 @@ process.on('uncaughtException', (err) => {
     // Flush logs then exit non-zero so PM2 restarts the worker
     setTimeout(() => process.exit(1), 500);
 });
+// HIGH-10: Track unhandled rejections — alert ops when threshold exceeded
+let _unhandledRejectionCount = 0;
+let _lastRejectionAlertAt = 0;
+const REJECTION_ALERT_THRESHOLD = 5;
+const REJECTION_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+
 process.on('unhandledRejection', (reason) => {
-    console.error('[FATAL] unhandledRejection:', reason);
-    // Don't exit on unhandled rejection — log it and continue.
-    // This is safer in production than crashing the worker.
+    _unhandledRejectionCount++;
+    console.error(`[FATAL] unhandledRejection #${_unhandledRejectionCount}:`, reason);
+
+    const now = Date.now();
+    if (
+        _unhandledRejectionCount >= REJECTION_ALERT_THRESHOLD &&
+        now - _lastRejectionAlertAt > REJECTION_ALERT_COOLDOWN_MS
+    ) {
+        _lastRejectionAlertAt = now;
+        // Lazy import to avoid circular dep at module load time
+        import('./telemetry/ops_alerts.js').then(({ sendOpsAlert }) => {
+            void sendOpsAlert('Unhandled Rejections', `${_unhandledRejectionCount} unhandled rejections since startup.\n\nLast: ${String(reason).slice(0, 200)}`, 'warning');
+        }).catch(() => { /* non-fatal */ });
+    }
 });
 
 async function main(): Promise<void> {
@@ -41,9 +58,20 @@ async function main(): Promise<void> {
     console.log('╚══════════════════════════════════════╝');
     console.log('');
 
+    // MED-8: Readiness checks — /ready returns 503 until all configured services are up
+    let _dbReady = false;
+    let _slackReady = false;
+    let _telegramReady = false;
+    let _telegramConfigured = false;
+    let _slackConfigured = false;
+    registerReadinessCheck('db', () => !env.DATABASE_URL || _dbReady);
+    registerReadinessCheck('slack', () => !_slackConfigured || _slackReady);
+    registerReadinessCheck('telegram', () => !_telegramConfigured || _telegramReady);
+
     // 1. Database (optional)
     if (env.DATABASE_URL) {
         await connectDB();
+        _dbReady = true;
     } else {
         console.log('[DB] No DATABASE_URL configured — running without persistence');
     }
@@ -54,9 +82,11 @@ async function main(): Promise<void> {
     // 2. Telegram (optional)
     let telegramBot: Awaited<ReturnType<typeof import('./interfaces/telegram.js').createTelegramBot>> | null = null;
     if (env.TELEGRAM_BOT_TOKEN) {
+        _telegramConfigured = true;
         const { createTelegramBot, startTelegramBot } = await import('./interfaces/telegram.js');
         telegramBot = createTelegramBot();
         await startTelegramBot(telegramBot);
+        _telegramReady = true;
     } else {
         console.log('[Telegram] No TELEGRAM_BOT_TOKEN configured — skipping');
     }
@@ -64,10 +94,13 @@ async function main(): Promise<void> {
     // 3. Slack (primary)
     let slackApp: Awaited<ReturnType<typeof createSlackApp>> | null = null;
     if (env.SLACK_BOT_TOKEN && env.SLACK_APP_TOKEN) {
+        _slackConfigured = true;
         const slackAppCandidate = createSlackApp();
         slackApp = await startSlackApp(slackAppCandidate);
         if (!slackApp) {
             console.warn('[Slack] Disabled — startup failed. Running without Slack.');
+        } else {
+            _slackReady = true;
         }
     } else {
         console.log('[Slack] Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN — skipping');

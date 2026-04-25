@@ -58,6 +58,8 @@ export interface IncomingMessage {
     isProceedClarification?: boolean;
     /** Plan tier for Cloudstick business users — drives SSH call rate limits. */
     planTier?: 'starter' | 'pro' | 'business';
+    /** AbortSignal for hard timeout — check at each loop iteration. */
+    signal?: AbortSignal;
 }
 
 /** Callback used by the loop to send text back to the user */
