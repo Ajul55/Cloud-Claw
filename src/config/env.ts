@@ -89,11 +89,10 @@ const EnvSchema = z.object({
 function loadEnv() {
     const result = EnvSchema.safeParse(process.env);
     if (!result.success) {
-        console.error('[Config] ❌ Invalid environment variables:');
-        result.error.issues.forEach((issue) => {
-            console.error(`  • ${issue.path.join('.')}: ${issue.message}`);
-        });
-        process.exit(1);
+        const errorMsg = result.error.issues
+            .map((issue) => `  • ${issue.path.join('.')}: ${issue.message}`)
+            .join('\n');
+        throw new Error(`[Config] ❌ Invalid environment variables:\n${errorMsg}`);
     }
     return result.data;
 }
