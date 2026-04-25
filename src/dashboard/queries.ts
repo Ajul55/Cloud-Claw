@@ -1,4 +1,4 @@
-import { getPool } from '../database/db.js';
+import { getDashboardPool } from './pool.js';
 import { getTotalActiveSessions } from '../services/session_limiter.js';
 import { getConsecutiveLlmFailures } from '../telemetry/llm_health.js';
 
@@ -97,7 +97,7 @@ export interface ToolsResult {
 }
 
 export async function fetchSessions(limit = 50): Promise<SessionRow[]> {
-    const pool = getPool();
+    const pool = getDashboardPool();
     const res = await pool.query(
         `SELECT id, channel, user_id, status, iteration, problem_class,
                 created_at, updated_at, last_activity
@@ -120,7 +120,7 @@ export async function fetchSessions(limit = 50): Promise<SessionRow[]> {
 }
 
 export async function fetchServers(): Promise<ServerRow[]> {
-    const pool = getPool();
+    const pool = getDashboardPool();
     const res = await pool.query(
         `SELECT id, label, ip, ssh_user, ssh_port, active, added_at
          FROM servers
@@ -138,7 +138,7 @@ export async function fetchServers(): Promise<ServerRow[]> {
 }
 
 export async function fetchApprovals(status?: string): Promise<ApprovalRow[]> {
-    const pool = getPool();
+    const pool = getDashboardPool();
     const where = status ? `WHERE status = $1` : '';
     const params = status ? [status] : [];
     const res = await pool.query(
@@ -163,7 +163,7 @@ export async function fetchApprovals(status?: string): Promise<ApprovalRow[]> {
 }
 
 export async function fetchTools(range: Range): Promise<ToolsResult> {
-    const pool = getPool();
+    const pool = getDashboardPool();
     const interval = RANGE_INTERVAL[range];
     const res = await pool.query(
         `SELECT tool_name, COUNT(*) AS count, ${laneCase()} AS lane
@@ -184,7 +184,7 @@ export async function fetchTools(range: Range): Promise<ToolsResult> {
 }
 
 export async function fetchStats(range: Range): Promise<StatsResult> {
-    const pool = getPool();
+    const pool = getDashboardPool();
     const interval = RANGE_INTERVAL[range];
     const bucket = range === '24h' ? 'hour' : 'day';
 

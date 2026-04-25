@@ -15,7 +15,7 @@ import { createSlackApp, startSlackApp } from './interfaces/slack.js';
 import { expireStaleApprovals } from './jobs/expire_approvals.js';
 import { timeoutStaleSessions } from './jobs/timeout_sessions.js';
 import { startSentinel } from './sentinel/scheduler.js';
-import { startHealthServer, registerReadinessCheck } from './health.js';
+import { startHealthServer, startDashboardServer, registerReadinessCheck } from './health.js';
 import { startAlertScheduler } from './telemetry/ops_alerts.js';
 import { createGatewayHandler } from './interfaces/http_gateway.js';
 
@@ -78,6 +78,9 @@ async function main(): Promise<void> {
 
     // 1b. Health check endpoint + Cloudstick HTTP gateway
     startHealthServer(9000, env.CLOUDSTICK_GATEWAY_KEY ? createGatewayHandler() : undefined);
+    if (env.DATABASE_URL) {
+        startDashboardServer(3001);
+    }
 
     // 2. Telegram (optional)
     let telegramBot: Awaited<ReturnType<typeof import('./interfaces/telegram.js').createTelegramBot>> | null = null;
@@ -114,14 +117,14 @@ async function main(): Promise<void> {
     startAlertScheduler();
 
     cron.schedule('*/5 * * * *', () => {
-        void expireStaleApprovals();
+        expireStaleApprovals().catch(err => console.warn('[cron] expireStaleApprovals failed:', err));
     });
     cron.schedule('*/10 * * * *', () => {
-        void timeoutStaleSessions();
+        timeoutStaleSessions().catch(err => console.warn('[cron] timeoutStaleSessions failed:', err));
     });
     // W7: Daily fix_memory TTL cleanup at 3 AM
     cron.schedule('0 3 * * *', () => {
-        void cleanupOldFixes(90);
+        cleanupOldFixes(90).catch(err => console.warn('[cron] cleanupOldFixes failed:', err));
     });
 
     // 4. Sentinel Heartbeat
@@ -156,6 +159,8 @@ async function main(): Promise<void> {
         if (env.DATABASE_URL) {
             const { closeDB } = await import('./database/db.js');
             await closeDB();
+            const { closeDashboardPool } = await import('./dashboard/pool.js');
+            await closeDashboardPool();
         }
         console.log('[Main] Goodbye 👋');
         process.exit(0);

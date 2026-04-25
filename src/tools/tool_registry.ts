@@ -6,6 +6,7 @@
  */
 
 import type { Tool } from './types.js';
+import { getDynamicToolOverrides } from './dynamic_registry.js';
 import { getCurrentTimeTool } from './get_current_time.js';
 import { discoveryAgentTool } from './discovery_agent.js';
 import { executeSshCommandTool } from './execute_ssh_command.js';
@@ -307,20 +308,28 @@ const INTENT_TOOL_GROUPS: Record<string, string[]> = {
 };
 
 /** Returns OpenAI-compatible function definitions for the LLM.
- *  Pass intentHint to limit the tool list to the most relevant subset. */
-export function getLLMToolDefinitions(intentHint?: string): Array<{
+ *  Pass intentHint to limit the tool list to the most relevant subset.
+ *  Pass tenantId to apply per-tenant dynamic enable/disable overrides from the DB. */
+export async function getLLMToolDefinitions(intentHint?: string, tenantId?: string): Promise<Array<{
     type: 'function';
     function: {
         name: string;
         description: string;
         parameters: Record<string, unknown>;
     };
-}> {
+}>> {
     let tools = ALL_TOOLS;
     if (intentHint && intentHint !== 'none' && INTENT_TOOL_GROUPS[intentHint]) {
         const allowed = new Set(INTENT_TOOL_GROUPS[intentHint]);
         tools = ALL_TOOLS.filter(t => allowed.has(t.name));
     }
+
+    // ARCH-5: filter out tools disabled for this tenant via the DB registry
+    const disabledTools = await getDynamicToolOverrides(tenantId);
+    if (disabledTools.size > 0) {
+        tools = tools.filter(t => !disabledTools.has(t.name));
+    }
+
     return tools.map((tool) => ({
         type: 'function' as const,
         function: {

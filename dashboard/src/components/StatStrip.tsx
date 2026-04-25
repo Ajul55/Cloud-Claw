@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useCountUp } from '../hooks/useCountUp';
+import type { Theme } from '../types';
 
 interface StatStripProps {
   tokens: number;
   costUsd: number;
   llmCalls: number;
   pendingHitl: number;
-  accent: string;
-  cardRadius: number;
+  theme: Theme;
 }
 
 function formatTokens(n: number): string {
@@ -16,119 +16,100 @@ function formatTokens(n: number): string {
   return String(Math.round(n));
 }
 
-// ─── Sparklines with CSS draw animation ─────────────────────────────────────
+// ─── Sparklines ──────────────────────────────────────────────────────────────
 
-const TokenSparkline = () => (
-  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
-    <defs>
-      <linearGradient id="spk-tok-line" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0%" stopColor="#EC4899" />
-        <stop offset="100%" stopColor="#F97316" />
-      </linearGradient>
-      <linearGradient id="spk-tok-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor="#EC4899" stopOpacity="0.18" />
-        <stop offset="100%" stopColor="#F97316" stopOpacity="0" />
-      </linearGradient>
-      <filter id="spk-glow-pk">
-        <feGaussianBlur stdDeviation="1.2" result="b" />
-        <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-      </filter>
-    </defs>
-    {/* Area fill — no animation, just reveals with path */}
-    <path className="sparkline-path"
-      d="M0,22 C8,18 12,8 20,10 C28,12 32,20 40,15 C48,10 54,4 64,6 L64,28 L0,28Z"
-      fill="url(#spk-tok-fill)" stroke="none"
-      style={{ strokeDasharray: 'none', animationDelay: '0.4s' }}
-    />
-    <path className="sparkline-path"
-      d="M0,22 C8,18 12,8 20,10 C28,12 32,20 40,15 C48,10 54,4 64,6"
-      fill="none" stroke="url(#spk-tok-line)" strokeWidth="2" strokeLinecap="round"
-      filter="url(#spk-glow-pk)"
-    />
-    <circle cx="64" cy="6" r="2.5" fill="#F97316"
-      style={{ animation: 'dotPop 0.3s ease 1.3s both' }} />
-  </svg>
-);
-
-const CostSparkline = () => (
-  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
-    <defs>
-      <linearGradient id="spk-cost-line" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0%" stopColor="#F59E0B" />
-        <stop offset="100%" stopColor="#FBBF24" />
-      </linearGradient>
-      <linearGradient id="spk-cost-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.18" />
-        <stop offset="100%" stopColor="#FBBF24" stopOpacity="0" />
-      </linearGradient>
-    </defs>
-    <path className="sparkline-path"
-      d="M0,20 C7,22 12,12 20,11 C28,10 30,17 40,13 C48,10 54,6 64,8 L64,28 L0,28Z"
-      fill="url(#spk-cost-fill)" stroke="none"
-      style={{ strokeDasharray: 'none', animationDelay: '0.5s' }}
-    />
-    <path className="sparkline-path"
-      d="M0,20 C7,22 12,12 20,11 C28,10 30,17 40,13 C48,10 54,6 64,8"
-      fill="none" stroke="url(#spk-cost-line)" strokeWidth="2" strokeLinecap="round"
-      style={{ animationDelay: '0.5s' }}
-    />
-    <circle cx="64" cy="8" r="2.5" fill="#FBBF24"
-      style={{ animation: 'dotPop 0.3s ease 1.4s both' }} />
-  </svg>
-);
-
-const LlmSparkline = () => {
-  const vals = [3, 5, 4, 7, 5, 6, 9, 5, 8, 10, 7, 9, 10];
-  const max = 10;
+function TokenSparkline({ theme }: { theme: Theme }) {
   return (
-    <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
+    <svg viewBox="0 0 70 28" style={{ display: 'block', width: 70, height: 28, flexShrink: 0 }}>
       <defs>
-        <linearGradient id="spk-llm-bar" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.9" />
-          <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.25" />
-        </linearGradient>
-        <linearGradient id="spk-llm-peak" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#0EA5E9" />
-          <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.5" />
+        <linearGradient id="spk-tok-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={theme.p} stopOpacity="0.2" />
+          <stop offset="100%" stopColor={theme.p} stopOpacity="0" />
         </linearGradient>
       </defs>
+      <path
+        d="M0,22 C8,18 14,8 22,10 C30,12 34,20 42,15 C50,10 58,4 70,6 L70,28 L0,28Z"
+        fill="url(#spk-tok-fill)" stroke="none"
+      />
+      <path
+        className="sparkline-path"
+        d="M0,22 C8,18 14,8 22,10 C30,12 34,20 42,15 C50,10 58,4 70,6"
+        fill="none" stroke={theme.p} strokeWidth="1.75" strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function CostSparkline() {
+  return (
+    <svg viewBox="0 0 70 28" style={{ display: 'block', width: 70, height: 28, flexShrink: 0 }}>
+      <defs>
+        <linearGradient id="spk-cost-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.2" />
+          <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M0,20 C8,22 14,12 22,11 C30,10 32,17 42,13 C50,10 58,6 70,8 L70,28 L0,28Z"
+        fill="url(#spk-cost-fill)" stroke="none"
+      />
+      <path
+        className="sparkline-path"
+        d="M0,20 C8,22 14,12 22,11 C30,10 32,17 42,13 C50,10 58,6 70,8"
+        fill="none" stroke="#F59E0B" strokeWidth="1.75" strokeLinecap="round"
+        style={{ animationDelay: '0.1s' }}
+      />
+    </svg>
+  );
+}
+
+function LlmBarSpark({ theme }: { theme: Theme }) {
+  const vals = [2, 3, 5, 4, 8, 6, 9, 10];
+  const max  = 10;
+  const bw   = 60 / vals.length - 2;
+  return (
+    <svg viewBox="0 0 60 28" style={{ display: 'block', width: 60, height: 28, flexShrink: 0 }}>
       {vals.map((v, i) => {
-        const h = (v / max) * 22;
+        const bh = Math.max(2, (v / max) * 24);
         return (
           <rect key={i}
-            x={i * 4.8 + 0.5} y={26 - h} width={3.6} height={h} rx="1.5"
-            fill={i === vals.length - 1 ? 'url(#spk-llm-peak)' : 'url(#spk-llm-bar)'}
+            x={i * (bw + 2)} y={26 - bh} width={bw} height={bh} rx="1.5"
+            fill="#3b82f6" opacity="0.65"
             style={{
               transformBox: 'fill-box', transformOrigin: 'bottom',
               transform: 'scaleY(0)',
-              animation: `growUp 0.5s cubic-bezier(0.22,1,0.36,1) ${0.25 + i * 0.05}s forwards`,
+              animation: `growUp 0.5s cubic-bezier(0.22,1,0.36,1) ${0.2 + i * 0.05}s forwards`,
             }}
           />
         );
       })}
     </svg>
   );
-};
+}
 
-const HitlSparkline = () => (
-  <svg viewBox="0 0 64 28" style={{ display: 'block', width: '100%', height: 30 }}>
-    <defs>
-      <linearGradient id="spk-hitl-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor="#7C3AED" stopOpacity="0.14" />
-        <stop offset="100%" stopColor="#7C3AED" stopOpacity="0" />
-      </linearGradient>
-    </defs>
-    <path className="sparkline-bar-path"
-      d="M0,24 L10,24 L10,18 L18,18 L18,24 L26,24 L26,14 L34,14 L34,24 L42,24 L42,10 L52,10 L52,24 L64,24"
-      fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
-    />
-    <path
-      d="M0,24 L10,24 L10,18 L18,18 L18,24 L26,24 L26,14 L34,14 L34,24 L42,24 L42,10 L52,10 L52,24 L64,24 L64,28 L0,28Z"
-      fill="url(#spk-hitl-fill)"
-      style={{ opacity: 0, animation: 'fadeUp 0.4s ease 0.8s forwards' }}
-    />
-  </svg>
-);
+function HitlBarSpark({ pendingHitl }: { pendingHitl: number }) {
+  const vals = [0, 0, 0, 1, 0, 0, 0, pendingHitl > 0 ? 1 : 0];
+  const max  = Math.max(...vals, 1);
+  const bw   = 60 / vals.length - 2;
+  return (
+    <svg viewBox="0 0 60 28" style={{ display: 'block', width: 60, height: 28, flexShrink: 0 }}>
+      {vals.map((v, i) => {
+        const bh = Math.max(2, (v / max) * 24);
+        return (
+          <rect key={i}
+            x={i * (bw + 2)} y={26 - bh} width={bw} height={bh} rx="1.5"
+            fill="#22c55e" opacity="0.65"
+            style={{
+              transformBox: 'fill-box', transformOrigin: 'bottom',
+              transform: 'scaleY(0)',
+              animation: `growUp 0.5s cubic-bezier(0.22,1,0.36,1) ${0.2 + i * 0.05}s forwards`,
+            }}
+          />
+        );
+      })}
+    </svg>
+  );
+}
 
 // ─── Metric card ──────────────────────────────────────────────────────────────
 
@@ -162,49 +143,47 @@ function MetricCard({ config, idx }: { config: MetricConfig; idx: number }) {
         boxShadow: hovered
           ? '0 1px 0 rgba(255,255,255,1) inset, 0 6px 20px rgba(0,0,0,0.09), 0 16px 40px rgba(0,0,0,0.08)'
           : '0 1px 0 rgba(255,255,255,0.85) inset, 0 2px 8px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.04)',
-        padding: '20px 22px 16px',
-        transform: hovered ? 'translateY(-4px)' : 'none',
+        padding: '18px 20px 16px',
+        transform: hovered ? 'translateY(-2px)' : 'none',
         transition: 'transform 0.22s cubic-bezier(0.25,0.46,0.45,0.94), box-shadow 0.22s ease, background 0.22s ease',
         animation: `fadeUp 0.4s ease ${idx * 0.08}s both`,
+        cursor: 'default',
       }}
     >
-      {/* Label row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div style={{
-          fontSize: 10, fontWeight: 700, color: '#9CA3AF',
-          textTransform: 'uppercase', letterSpacing: '0.1em',
-        }}>
-          {config.label}
-        </div>
+      {/* Label + icon bg */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{config.label}</span>
         <div style={{
           width: 7, height: 7, borderRadius: '50%',
-          background: config.pulseColor,
-          flexShrink: 0,
-          transition: `box-shadow 0.2s ease, transform 0.2s ease`,
-          ...(hovered ? {
-            boxShadow: `0 0 0 4px ${config.pulseColor}25`,
-            transform: 'scale(1.2)',
-          } : {}),
+          background: config.pulseColor, flexShrink: 0,
+          ...(hovered ? { boxShadow: `0 0 0 4px ${config.pulseColor}25`, transform: 'scale(1.2)' } : {}),
+          transition: 'box-shadow 0.2s ease, transform 0.2s ease',
         }} />
       </div>
 
       {/* Animated value */}
       <div style={{
-        fontSize: 30, fontWeight: 900,
-        color: config.valueColor ?? '#0F0F1A',
-        letterSpacing: '-1.5px', lineHeight: 1,
-        marginBottom: 10,
-        transition: 'color 0.2s ease',
+        fontFamily: "'Geist', sans-serif",
+        fontSize: 26, fontWeight: 700,
+        color: config.valueColor ?? '#1a1d23',
+        letterSpacing: '-0.03em', lineHeight: 1,
+        marginBottom: 8,
       }}>
         {config.formatFn(animated)}
       </div>
 
-      {/* Sparkline */}
-      <div style={{ marginBottom: 8 }}>{config.spark}</div>
-
-      {/* Sub label */}
-      <div style={{ fontSize: 11, color: config.subColor, fontWeight: 500, marginTop: 2 }}>
-        {config.sub}
+      {/* Bottom row: sub + sparkline */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <span style={{
+          fontSize: 11, color: config.subColor,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          {config.subColor === '#22c55e' && (
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: config.subColor, display: 'inline-block' }} />
+          )}
+          {config.sub}
+        </span>
+        {config.spark}
       </div>
     </div>
   );
@@ -212,18 +191,18 @@ function MetricCard({ config, idx }: { config: MetricConfig; idx: number }) {
 
 // ─── Strip ────────────────────────────────────────────────────────────────────
 
-export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl }: StatStripProps) {
+export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl, theme }: StatStripProps) {
   const configs: MetricConfig[] = [
     {
       label: 'Total Tokens',
       rawValue: tokens,
       formatFn: (n) => formatTokens(n),
-      sub: `↑ ${formatTokens(tokens)} tokens used today`,
+      sub: `↑ ${formatTokens(Math.round(tokens / 2400))} tokens used today`,
       subColor: '#22c55e',
-      borderGradientNormal: 'linear-gradient(135deg, #EC489935, #F9731618)',
-      borderGradientHover:  'linear-gradient(135deg, #EC489960, #F9731640)',
-      pulseColor: '#EC4899',
-      spark: <TokenSparkline />,
+      borderGradientNormal: `linear-gradient(135deg, ${theme.p}35, ${theme.l}18)`,
+      borderGradientHover:  `linear-gradient(135deg, ${theme.p}60, ${theme.l}40)`,
+      pulseColor: theme.p,
+      spark: <TokenSparkline theme={theme} />,
     },
     {
       label: 'Cost (USD)',
@@ -243,10 +222,10 @@ export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl }: StatStripP
       formatFn: (n) => String(Math.round(n)),
       sub: 'Across active sessions',
       subColor: '#9CA3AF',
-      borderGradientNormal: 'linear-gradient(135deg, #06B6D435, #0EA5E918)',
-      borderGradientHover:  'linear-gradient(135deg, #06B6D460, #0EA5E940)',
-      pulseColor: '#06B6D4',
-      spark: <LlmSparkline />,
+      borderGradientNormal: 'linear-gradient(135deg, #3b82f635, #60a5fa18)',
+      borderGradientHover:  'linear-gradient(135deg, #3b82f660, #60a5fa40)',
+      pulseColor: '#3b82f6',
+      spark: <LlmBarSpark theme={theme} />,
     },
     {
       label: 'Pending HITL',
@@ -256,12 +235,12 @@ export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl }: StatStripP
       subColor: pendingHitl === 0 ? '#22c55e' : '#ef4444',
       borderGradientNormal: pendingHitl > 0
         ? 'linear-gradient(135deg, #ef444435, #dc262618)'
-        : 'linear-gradient(135deg, #7C3AED35, #A855F718)',
+        : 'linear-gradient(135deg, #22c55e35, #16a34a18)',
       borderGradientHover: pendingHitl > 0
         ? 'linear-gradient(135deg, #ef444460, #dc262640)'
-        : 'linear-gradient(135deg, #7C3AED60, #A855F740)',
-      pulseColor: pendingHitl > 0 ? '#ef4444' : '#7C3AED',
-      spark: <HitlSparkline />,
+        : 'linear-gradient(135deg, #22c55e60, #16a34a40)',
+      pulseColor: pendingHitl > 0 ? '#ef4444' : '#22c55e',
+      spark: <HitlBarSpark pendingHitl={pendingHitl} />,
     },
   ];
 
@@ -270,7 +249,6 @@ export function StatStrip({ tokens, costUsd, llmCalls, pendingHitl }: StatStripP
       display: 'grid',
       gridTemplateColumns: 'repeat(4, 1fr)',
       gap: 12,
-      marginBottom: 16,
     }}>
       {configs.map((config, idx) => (
         <MetricCard key={config.label} config={config} idx={idx} />

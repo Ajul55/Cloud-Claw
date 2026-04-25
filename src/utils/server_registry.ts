@@ -1,6 +1,11 @@
 import { getCloudstickClient } from '../api/cloudstick_client.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
 
+// MED-3: 60s TTL cache keyed by userId — prevents repeated API calls on every loop iteration
+const SERVER_CACHE_TTL_MS = 60_000;
+interface ServerCache { servers: ServerNode[]; expiresAt: number }
+const _serverCache = new Map<string, ServerCache>();
+
 export interface ServerNode {
     id: number;
     label: string;
@@ -26,6 +31,9 @@ export async function getAllServers(): Promise<ServerNode[]> {
     const effectiveUserId = user?.cloudstick_user_id ?? (await import('../config/env.js')).env.CLOUDSTICK_USER_ID;
     if (!effectiveUserId) return [];
 
+    const cached = _serverCache.get(effectiveUserId);
+    if (cached && Date.now() < cached.expiresAt) return cached.servers;
+
     try {
         const client = getCloudstickClient();
         const response = await client.listServersByUser(effectiveUserId) as {
@@ -43,6 +51,7 @@ export async function getAllServers(): Promise<ServerNode[]> {
                 active: true, // Cloudstick API sometimes returns is_active: false for running nodes
             }));
         console.log('[server_registry] Servers from API:', mapped.map(s => `${s.label} (${s.ip}, id=${s.id})`).join(', '));
+        _serverCache.set(effectiveUserId, { servers: mapped, expiresAt: Date.now() + SERVER_CACHE_TTL_MS });
         return mapped;
     } catch (err) {
         console.warn('[server_registry] Cloudstick API failed:', err);

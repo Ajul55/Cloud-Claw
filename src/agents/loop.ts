@@ -583,7 +583,8 @@ async function _runAgentLoopBody(
     }
 
     // MED-12: Pass intent hint to limit tool list to relevant subset
-    const toolDefinitions = getLLMToolDefinitions(intent.toolHint !== 'none' ? intent.toolHint : undefined);
+    // ARCH-5: getLLMToolDefinitions is now async — awaited for dynamic DB overrides
+    const toolDefinitions = await getLLMToolDefinitions(intent.toolHint !== 'none' ? intent.toolHint : undefined);
     // Fix #17: centralise canRequireTool guard
     const canRequireTool = toolDefinitions.length > 0;
 

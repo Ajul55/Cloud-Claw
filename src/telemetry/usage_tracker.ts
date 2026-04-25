@@ -1,4 +1,5 @@
 import { getPool, isDBConfigured } from '../database/db.js';
+import { LLM_PRICING } from '../config/llm_pricing.js';
 
 export interface UsageData {
     sessionId: string;
@@ -9,26 +10,6 @@ export interface UsageData {
     toolName?: string;
     accountId?: string;
 }
-
-// Approximate cost in USD per 1,000,000 tokens.
-// Add new models here when LLM provider changes.
-const LLM_PRICING: Record<string, { in: number; out: number }> = {
-    // OpenAI Settings
-    'gpt-4o': { in: 5, out: 15 },
-    'gpt-4o-2024-05-13': { in: 5, out: 15 },
-    'gpt-4o-mini': { in: 0.15, out: 0.60 },
-
-    // Anthropic Settings
-    'claude-3-5-sonnet-20240620': { in: 3, out: 15 },
-
-    // Groq Settings
-    'llama-3.1-70b-versatile': { in: 0.59, out: 0.79 },
-    'llama3-8b-8192': { in: 0.05, out: 0.08 },
-
-    // MiniMax Settings
-    'abab6.5s-chat': { in: 1.0, out: 1.0 },
-    'minimax-m2.5': { in: 0.8, out: 0.8 },
-};
 
 function calculateCost(model: string, tokensIn: number, tokensOut: number): number {
     const rate = LLM_PRICING[model.toLowerCase()];

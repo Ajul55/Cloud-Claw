@@ -103,6 +103,21 @@ export async function connectDB(): Promise<void> {
                 // Usage log: ensure account_id column exists for multi-tenant tracking
                 await migrationClient.query(`ALTER TABLE IF EXISTS usage_log ADD COLUMN IF NOT EXISTS account_id TEXT;`);
 
+                // ARCH-5: Dynamic Tool Registry
+                await migrationClient.query(`
+                  CREATE TABLE IF NOT EXISTS tools (
+                    id          TEXT        PRIMARY KEY,
+                    name        TEXT        NOT NULL,
+                    description TEXT,
+                    schema      JSONB,
+                    tier        INTEGER     DEFAULT 1,
+                    enabled     BOOLEAN     DEFAULT true,
+                    tenant_id   UUID        REFERENCES accounts(id) ON DELETE CASCADE
+                  );
+                `);
+                await migrationClient.query(`CREATE INDEX IF NOT EXISTS idx_tools_tenant ON tools (tenant_id);`);
+                await migrationClient.query(`CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools (enabled);`);
+
                 await migrationClient.query('SELECT pg_advisory_unlock(42)');
             } finally {
                 migrationClient.release();

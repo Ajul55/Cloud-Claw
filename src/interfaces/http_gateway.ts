@@ -20,6 +20,31 @@ const RATE_LIMITS: Record<string, number> = { starter: 10, pro: 30, business: 60
 const _rateCounts = new Map<string, { count: number; windowStart: number }>();
 const RATE_WINDOW_MS = 60_000;
 
+// Prune stale rate-limit entries every 5 minutes to prevent unbounded map growth
+setInterval(() => {
+    const cutoff = Date.now() - RATE_WINDOW_MS * 2;
+    for (const [id, entry] of _rateCounts) {
+        if (entry.windowStart < cutoff) _rateCounts.delete(id);
+    }
+}, 5 * 60_000).unref();
+
+// ARCH-4: Bounded incoming message queue per session
+const SESSION_QUEUE_LIMIT = 3;
+const _sessionInFlight = new Map<string, number>();
+
+function acquireSessionSlot(sessionId: string): boolean {
+    const count = _sessionInFlight.get(sessionId) ?? 0;
+    if (count >= SESSION_QUEUE_LIMIT) return false;
+    _sessionInFlight.set(sessionId, count + 1);
+    return true;
+}
+
+function releaseSessionSlot(sessionId: string): void {
+    const count = _sessionInFlight.get(sessionId) ?? 1;
+    if (count <= 1) _sessionInFlight.delete(sessionId);
+    else _sessionInFlight.set(sessionId, count - 1);
+}
+
 function checkRateLimit(accountId: string, plan: string): boolean {
     const limit = RATE_LIMITS[plan] ?? 10;
     const now = Date.now();
@@ -240,6 +265,12 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
         });
     }
 
+    // ── ARCH-4: per-session in-flight request limit ───────────────────────────
+    if (!acquireSessionSlot(sessionId)) {
+        releaseSession(accountId);
+        return json(res, 429, { error: 'SESSION_BUSY', message: 'Session busy, try again shortly' });
+    }
+
     // Run agent loop in background — don't block the POST response
     const sessionTimeout = setTimeout(() => {
         console.warn('[gateway] Session', sessionId, 'exceeded 5-minute timeout — force closing bus');
@@ -255,7 +286,7 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
             emitSSE(sessionId, 'error', { message: 'An error occurred processing your request.' });
             closeBus(sessionId);
         })
-        .finally(() => { releaseSession(accountId); });
+        .finally(() => { releaseSession(accountId); releaseSessionSlot(sessionId); });
 
     logger.info('gateway_chat_accepted', { module: 'gateway', event: 'chat_accepted', requestId, sessionId, accountId, plan });
 

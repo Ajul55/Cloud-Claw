@@ -7,6 +7,7 @@ import { LaneSplitChart } from '../components/LaneSplitChart';
 import { SessionsTable } from '../components/SessionsTable';
 import { ChevronRight } from '../components/Icons';
 import type { StatsResponse, Range } from '../types';
+import { THEMES } from '../types';
 
 const ACCENT = '#EC4899';
 const card: React.CSSProperties = {
@@ -23,6 +24,7 @@ interface Props {
 
 export function AnalyticsPage({ data, range }: Props) {
   const totals = data?.totals ?? { tokens: 0, costUsd: 0, llmCalls: 0, pendingHitl: 0 };
+  const theme = THEMES.violet;
 
   return (
     <>
@@ -40,8 +42,7 @@ export function AnalyticsPage({ data, range }: Props) {
         costUsd={totals.costUsd}
         llmCalls={totals.llmCalls}
         pendingHitl={totals.pendingHitl}
-        accent={ACCENT}
-        cardRadius={20}
+        theme={theme}
       />
 
       <SystemHealthStrip
@@ -49,7 +50,7 @@ export function AnalyticsPage({ data, range }: Props) {
         memoryMb={data?.system?.memoryMb ?? 0}
         uptimeSeconds={data?.system?.uptimeSeconds ?? 0}
         llmConsecutiveErrors={data?.system?.llmConsecutiveErrors ?? 0}
-        cardRadius={20}
+        theme={theme}
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.75fr', gap: 14, marginBottom: 16 }}>
@@ -68,7 +69,7 @@ export function AnalyticsPage({ data, range }: Props) {
             </div>
           </div>
           <div style={{ height: 220 }}>
-            <BurnRateChart data={data?.burnRate ?? []} range={range} />
+            <BurnRateChart data={data?.burnRate ?? []} range={range} theme={theme} />
           </div>
         </div>
 
@@ -77,7 +78,7 @@ export function AnalyticsPage({ data, range }: Props) {
             <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Top Tools</div>
             <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>By call count</div>
           </div>
-          <TopToolsChart data={data?.topTools ?? []} />
+          <TopToolsChart data={data?.topTools ?? []} theme={theme} />
         </div>
 
         <div style={{ ...card, padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center' }} className="premium-card">
@@ -85,7 +86,7 @@ export function AnalyticsPage({ data, range }: Props) {
             <div style={{ fontSize: 14, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.3px' }}>Lane Split</div>
             <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>By session type</div>
           </div>
-          <LaneSplitChart data={data?.laneSplit ?? []} />
+          <LaneSplitChart data={data?.laneSplit ?? []} theme={theme} />
         </div>
       </div>
 

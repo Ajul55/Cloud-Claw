@@ -6,12 +6,13 @@ import { ToolsPage } from './pages/ToolsPage';
 import { ServersPage } from './pages/ServersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { HelpPage } from './pages/HelpPage';
+import { ThemePicker } from './components/ThemePicker';
 import { Search, RefreshCw, AlertTriangle } from './components/Icons';
 import { useStats } from './hooks/useStats';
-import type { Range, NavPage } from './types';
+import type { Range, NavPage, Theme } from './types';
+import { THEMES } from './types';
 
 const RANGES: Range[] = ['24h', '7d', '30d'];
-const ACCENT = '#EC4899';
 
 // ─── Ripple hook ─────────────────────────────────────────────────────────────
 
@@ -35,7 +36,9 @@ function useRipple() {
 
 // ─── Range button ─────────────────────────────────────────────────────────────
 
-function RangeButton({ r, active, onClick }: { r: Range; active: boolean; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void }) {
+function RangeButton({
+  r, active, onClick, theme,
+}: { r: Range; active: boolean; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; theme: Theme }) {
   const { ripples, addRipple } = useRipple();
   const [pressed, setPressed] = useState(false);
 
@@ -47,22 +50,18 @@ function RangeButton({ r, active, onClick }: { r: Range; active: boolean; onClic
       onMouseLeave={() => setPressed(false)}
       style={{
         position: 'relative', overflow: 'hidden',
-        padding: '5px 13px', borderRadius: 8, border: 'none', cursor: 'pointer',
+        padding: '5px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
         fontSize: 12, fontWeight: 600,
-        background: active ? 'linear-gradient(135deg, #EC4899, #F97316)' : 'transparent',
-        color: active ? '#fff' : '#6B7280',
-        transition: 'all 0.18s ease',
-        boxShadow: active ? '0 2px 10px rgba(236,72,153,0.35)' : 'none',
+        background: active ? theme.p : 'transparent',
+        color: active ? '#fff' : '#9ca3af',
+        transition: 'all 0.15s ease',
         transform: pressed ? 'scale(0.94)' : 'scale(1)',
         fontFamily: 'inherit',
       }}
     >
       {r}
       {ripples.map(rp => (
-        <span key={rp.id} className="ripple-wave" style={{
-          left: rp.x, top: rp.y,
-          width: rp.size, height: rp.size,
-        }} />
+        <span key={rp.id} className="ripple-wave" style={{ left: rp.x, top: rp.y, width: rp.size, height: rp.size }} />
       ))}
     </button>
   );
@@ -73,6 +72,7 @@ function RangeButton({ r, active, onClick }: { r: Range; active: boolean; onClic
 export default function App() {
   const [activePage, setActivePage] = useState<NavPage>('Dashboard');
   const [range, setRange]           = useState<Range>('24h');
+  const [theme, setTheme]           = useState<Theme>(THEMES.violet);
   const { data, loading, error, refresh } = useStats(range);
 
   const totals = data?.totals ?? { tokens: 0, costUsd: 0, llmCalls: 0, pendingHitl: 0 };
@@ -80,12 +80,12 @@ export default function App() {
   const { ripples: refreshRipples, addRipple: addRefreshRipple } = useRipple();
   const [refreshPressed, setRefreshPressed] = useState(false);
 
-  // Keyboard shortcuts: 1-5 for nav, R for refresh
+  // Keyboard shortcuts: 1-4 for nav, R for refresh
   useEffect(() => {
     const pages: NavPage[] = ['Dashboard', 'Sessions', 'Tools', 'Servers'];
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key >= '1' && e.key <= '5') setActivePage(pages[Number(e.key) - 1]);
+      if (e.key >= '1' && e.key <= '4') setActivePage(pages[Number(e.key) - 1]);
       if (e.key === 'r' || e.key === 'R') refresh();
     }
     window.addEventListener('keydown', handleKey);
@@ -102,7 +102,7 @@ export default function App() {
     }}>
       <Sidebar
         pendingHitl={totals.pendingHitl}
-        accent={ACCENT}
+        theme={theme}
         activeNav={activePage}
         onNavChange={setActivePage}
       />
@@ -111,23 +111,20 @@ export default function App() {
 
         {/* Top Bar */}
         <header style={{
-          height: 60,
-          background: 'rgba(255,255,255,0.88)',
-          backdropFilter: 'blur(18px)',
-          WebkitBackdropFilter: 'blur(18px)',
-          borderBottom: '1px solid rgba(234,235,242,0.8)',
+          height: 54,
+          background: '#fff',
+          borderBottom: '1px solid #e9eaf0',
           display: 'flex', alignItems: 'center', padding: '0 24px', gap: 14,
-          boxShadow: '0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 10px rgba(0,0,0,0.04)',
           flexShrink: 0,
         }}>
           {/* Search */}
           <div style={{
-            flex: 1, maxWidth: 360, height: 36,
-            background: '#F4F5FA', borderRadius: 10, border: '1px solid #EAEBF2',
-            display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px',
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: '#f9fafb', border: '1px solid #e5e7eb',
+            borderRadius: 9, padding: '7px 14px', width: 280, cursor: 'text',
           }}>
             <Search size={13} color="#9CA3AF" />
-            <span style={{ fontSize: 12.5, color: '#B0B4C0' }}>Sessions, tools, servers…</span>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Search sessions, tools, servers…</span>
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -135,15 +132,14 @@ export default function App() {
               <>
                 {/* Range toggles */}
                 <div style={{
-                  display: 'flex', background: '#F4F5FA', borderRadius: 10,
-                  padding: 3, border: '1px solid #EAEBF2',
+                  display: 'flex', background: '#f3f4f6',
+                  borderRadius: 8, padding: 3, gap: 1,
                 }}>
                   {RANGES.map(r => (
                     <RangeButton
-                      key={r}
-                      r={r}
-                      active={range === r}
+                      key={r} r={r} active={range === r}
                       onClick={() => setRange(r)}
+                      theme={theme}
                     />
                   ))}
                 </div>
@@ -158,48 +154,52 @@ export default function App() {
                   style={{
                     position: 'relative', overflow: 'hidden',
                     display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '7px 14px', borderRadius: 10,
-                    background: 'linear-gradient(#fff, #fff) padding-box, linear-gradient(135deg, #EC489940, #F9731630) border-box',
-                    border: '1px solid transparent',
-                    color: ACCENT, fontSize: 12, fontWeight: 600,
+                    padding: '6px 14px', borderRadius: 8,
+                    border: '1px solid #e5e7eb',
+                    background: '#fff', color: '#6b7280',
+                    fontSize: 12, fontWeight: 500,
                     cursor: loading ? 'not-allowed' : 'pointer',
                     opacity: loading ? 0.6 : 1,
                     fontFamily: 'inherit',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                     transform: refreshPressed ? 'scale(0.94)' : 'scale(1)',
-                    transition: 'transform 0.12s ease, opacity 0.15s ease',
+                    transition: 'transform 0.12s ease, opacity 0.15s ease, background 0.15s ease',
                   }}
                 >
                   <RefreshCw
-                    size={13} color={ACCENT}
+                    size={13} color="#6b7280"
                     style={{ transition: 'transform 0.5s ease', transform: loading ? 'rotate(360deg)' : 'none' }}
                   />
                   {loading ? 'Loading…' : 'Refresh'}
                   {refreshRipples.map(rp => (
-                    <span key={rp.id} className="ripple-wave" style={{
-                      left: rp.x, top: rp.y,
-                      width: rp.size, height: rp.size,
-                      background: 'rgba(236,72,153,0.15)',
-                    }} />
+                    <span key={rp.id} className="ripple-wave" style={{ left: rp.x, top: rp.y, width: rp.size, height: rp.size }} />
                   ))}
                 </button>
               </>
             )}
 
+            <ThemePicker current={theme} onChange={setTheme} />
+
             {/* Avatar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              cursor: 'pointer', padding: '4px 8px', borderRadius: 8,
+            }}>
               <div style={{
-                width: 36, height: 36, borderRadius: 10,
-                background: 'linear-gradient(135deg, #7C3AED, #EC4899)',
+                width: 32, height: 32, borderRadius: '50%',
+                background: `linear-gradient(135deg,${theme.d},${theme.l})`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontSize: 11, fontWeight: 800,
-                boxShadow: '0 3px 12px rgba(124,58,237,0.35)',
-                letterSpacing: '-0.3px',
-              }}>Pi</div>
-              <div>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0F0F1A', letterSpacing: '-0.2px' }}>Pilot</div>
-                <div style={{ fontSize: 10, color: '#9CA3AF' }}>Admin</div>
+                flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>PI</span>
               </div>
+              <div style={{ lineHeight: 1.3 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>Pilot</div>
+                <div style={{ fontSize: 10, color: '#9ca3af' }}>Admin</div>
+              </div>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none"
+                stroke="#9ca3af" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
             </div>
           </div>
         </header>
@@ -221,13 +221,13 @@ export default function App() {
           </div>
         )}
 
-        {/* Scrollable content — key triggers re-mount + page-enter animation */}
+        {/* Scrollable content */}
         <main
           key={activePage}
           className="page-enter"
           style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}
         >
-          {activePage === 'Dashboard'  && <DashboardPage data={data} range={range} />}
+          {activePage === 'Dashboard'  && <DashboardPage data={data} range={range} theme={theme} />}
           {activePage === 'Sessions'   && <SessionsPage />}
           {activePage === 'Tools'      && <ToolsPage />}
           {activePage === 'Servers'    && <ServersPage />}

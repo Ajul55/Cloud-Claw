@@ -24,17 +24,9 @@ export function registerReadinessCheck(name: string, check: () => boolean): void
 
 export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler): void {
     const server = http.createServer(async (req, res) => {
-        // Dashboard routes (/api/stats and /dashboard/*) take priority
         const url = req.url ?? '/';
-        const dashboardApiRoutes = ['/api/stats', '/api/sessions', '/api/servers', '/api/approvals', '/api/tools'];
-        const isDashboardRoute = dashboardApiRoutes.some(r => url === r || url.startsWith(r + '?'))
-            || url === '/dashboard' || url.startsWith('/dashboard/');
-        if (isDashboardRoute) {
-            await handleDashboardRequest(req, res);
-            return;
-        }
 
-        if (gatewayHandler && req.url?.startsWith('/api/')) {
+        if (gatewayHandler && url.startsWith('/api/')) {
             try {
                 await gatewayHandler(req, res);
             } catch (err) {
@@ -106,10 +98,26 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
 
     server.listen(port, () => {
         console.log(`[health] Listening on :${port}/health`);
-        console.log(`[dashboard] Available at :${port}/dashboard`);
         if (gatewayHandler) console.log(`[health] Gateway mounted on :${port}/api/`);
     });
 
     // Don't let the health server keep the process alive if everything else shuts down
+    server.unref();
+}
+
+export function startDashboardServer(port = 3001): void {
+    const server = http.createServer(async (req, res) => {
+        try {
+            await handleDashboardRequest(req, res);
+        } catch (err) {
+            if (!res.headersSent) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'internal_error' }));
+            }
+        }
+    });
+    server.listen(port, () => {
+        console.log(`[dashboard] Listening on :${port}`);
+    });
     server.unref();
 }

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
+import type { Theme } from '../types';
 
 interface SystemHealthStripProps {
   activeSessions: number;
   memoryMb: number;
   uptimeSeconds: number;
   llmConsecutiveErrors: number;
-  cardRadius: number;
+  theme: Theme;
+  cardRadius?: number;
 }
 
 function formatUptime(seconds: number): string {
@@ -119,6 +121,7 @@ export function SystemHealthStrip({
   memoryMb,
   uptimeSeconds,
   llmConsecutiveErrors,
+  theme: _theme,
 }: SystemHealthStripProps) {
   const metrics: HealthMetric[] = [
     {
