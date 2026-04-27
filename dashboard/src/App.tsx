@@ -98,7 +98,7 @@ export default function App() {
     <div style={{
       display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden',
       fontFamily: "'Geist', -apple-system, sans-serif",
-      background: '#F2F3F8', color: '#0F0F1A', fontSize: 13,
+      background: '#F8FAFC', color: '#1A1D23', fontSize: 13,
     }}>
       <Sidebar
         pendingHitl={totals.pendingHitl}
@@ -186,7 +186,7 @@ export default function App() {
             }}>
               <div style={{
                 width: 32, height: 32, borderRadius: '50%',
-                background: `linear-gradient(135deg,${theme.d},${theme.l})`,
+                background: `linear-gradient(135deg,${theme.p},${theme.l})`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0,
               }}>

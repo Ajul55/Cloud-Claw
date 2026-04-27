@@ -42,6 +42,9 @@ const BLOCKED_PATTERNS: Array<[RegExp, string]> = [
     [/nft\s+flush\s+ruleset/i, 'nft flush ruleset is not allowed'],
 
     // Arbitrary injections & redirects to scary places
+    [/(\$\(|\`)/, 'Command substitution ($() or backticks) is not allowed'],
+    [/[<>]\(/, 'Process substitution (<() or >()) is not allowed'],
+    [/\/dev\/(tcp|udp)\//i, 'Direct bash network redirects are not allowed'],
     [/>\s*\/dev\/[sh]d[a-z]/i, 'Direct writes to block devices are not allowed'],
     [/>>?\s*\/etc\/(passwd|shadow|sudoers|hosts)/i, 'Overwriting critical system files is not allowed'],
     [/\bbase64\b.*\|\s*(bash|sh)\b/i, 'Encoded payload pipe to shell is not allowed'],
@@ -80,7 +83,7 @@ const READ_SAFE_BINARIES = new Set([
     'netstat', 'ss', 'dig', 'curl', 'wget', 'ping', 'traceroute',
     'whoami', 'id', 'date', 'timedatectl', 'hostname', 'uname',
     'which', 'command', 'type', 'php', // php is read safe if not executing scripts
-    'sleep',
+    'sleep', 'timeout',
     'echo', 'printf', 'test', 'true', 'false',             // shell builtins — harmless output/logic
     'basename', 'dirname', 'readlink', 'realpath',          // path utilities — read-only
     'env', 'printenv',                                       // environment inspection
@@ -207,6 +210,12 @@ export function checkCommand(command: string, isWriteTool: boolean = false): Fil
         let binary = tokens[0].toLowerCase();
         if (binary === 'sudo' && tokens.length > 1) {
             binary = tokens[1].toLowerCase();
+        }
+
+        // Skip sub-commands where the extracted binary is purely numeric
+        // (e.g. IP address fragments from tokenization edge cases like "1.1.1.1")
+        if (/^\d+(\.\d+)*$/.test(binary)) {
+            continue; // not a command, skip
         }
 
         // Layer A: Is it a universally safe read-only binary?

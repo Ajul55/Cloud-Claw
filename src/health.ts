@@ -26,6 +26,26 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? '/';
 
+        // ── Serve Dashboard and its APIs ──────────────────────────────────────
+        const isDashboardApi = url.startsWith('/api/stats') || 
+                               url.startsWith('/api/sessions') || 
+                               url.startsWith('/api/servers') || 
+                               url.startsWith('/api/approvals') || 
+                               url.startsWith('/api/tools');
+        
+        if (url.startsWith('/dashboard') || isDashboardApi) {
+            try {
+                await handleDashboardRequest(req, res);
+            } catch (err) {
+                if (!res.headersSent) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Internal server error' }));
+                }
+            }
+            return;
+        }
+
+        // ── Serve Cloudstick HTTP Gateway ─────────────────────────────────────
         if (gatewayHandler && url.startsWith('/api/')) {
             try {
                 await gatewayHandler(req, res);
@@ -77,13 +97,18 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
                 pendingApprovals = parseInt(r.rows[0]?.count ?? '0', 10);
             } catch { /* non-fatal */ }
 
+            // Resolve all async values BEFORE writing headers so the catch block
+            // can still send a 503 if any of these throw.
+            let activeSessions = 0;
+            try { activeSessions = await getTotalActiveSessions(); } catch { /* non-fatal */ }
+
             res.writeHead(200, headers);
             res.end(JSON.stringify({
                 status: 'ok',
                 db: 'connected',
                 uptime: Math.round(process.uptime()),
                 memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
-                activeSessions: getTotalActiveSessions(),
+                activeSessions,
                 pendingApprovals,
             }));
         } catch {

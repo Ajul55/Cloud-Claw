@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { StatStrip } from '../components/StatStrip';
 import { SystemHealthStrip } from '../components/SystemHealthStrip';
 import { BurnRateChart } from '../components/BurnRateChart';
@@ -6,7 +6,8 @@ import { LaneSplitChart } from '../components/LaneSplitChart';
 import { SessionsTable } from '../components/SessionsTable';
 import { TopToolsChart } from '../components/TopToolsChart';
 import { ChevronRight } from '../components/Icons';
-import type { StatsResponse, Range, Theme } from '../types';
+import { useBurnRate } from '../hooks/useBurnRate';
+import type { StatsResponse, Range, BurnRange, Theme } from '../types';
 
 interface Props {
   data: StatsResponse | null;
@@ -16,6 +17,8 @@ interface Props {
 
 export function DashboardPage({ data, range, theme }: Props) {
   const totals = data?.totals ?? { tokens: 0, costUsd: 0, llmCalls: 0, pendingHitl: 0 };
+  const [burnRange, setBurnRange] = useState<BurnRange>('7d');
+  const { data: burnData, loading: burnLoading } = useBurnRate(burnRange);
 
   const card: React.CSSProperties = {
     background: '#fff',
@@ -68,20 +71,13 @@ export function DashboardPage({ data, range, theme }: Props) {
       }}>
         {/* Token Burn Rate */}
         <div style={{ ...card, padding: '20px 22px' }} className="premium-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 2 }}>Token Burn Rate</div>
-              <div style={{ fontSize: 11, color: '#9CA3AF' }}>Tokens per hour · {range} window</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', background: '#22c55e',
-                display: 'inline-block', animation: 'livePulse 2s ease infinite',
-              }} />
-              Live
-            </div>
-          </div>
-          <BurnRateChart data={data?.burnRate ?? []} range={range} theme={theme} />
+          <BurnRateChart
+            data={burnData}
+            burnRange={burnRange}
+            onBurnRangeChange={setBurnRange}
+            loading={burnLoading}
+            theme={theme}
+          />
         </div>
 
         {/* Right column */}

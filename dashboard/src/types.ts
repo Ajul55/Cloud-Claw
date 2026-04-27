@@ -1,4 +1,5 @@
 export type Range = '24h' | '7d' | '30d';
+export type BurnRange = '7d' | '14d' | '30d';
 
 export interface Theme {
   id: string;
@@ -12,13 +13,13 @@ export interface Theme {
 }
 
 export const THEMES: Record<string, Theme> = {
-  violet:  { id:'violet',  label:'Violet',  p:'#7c3aed', l:'#a78bfa', d:'#5b21b6', bg:'#f5f3ff', nav:'#ede9fe', grad:'#c4b5fd' },
-  indigo:  { id:'indigo',  label:'Indigo',  p:'#4f46e5', l:'#818cf8', d:'#3730a3', bg:'#eef2ff', nav:'#e0e7ff', grad:'#a5b4fc' },
-  blue:    { id:'blue',    label:'Blue',    p:'#2563eb', l:'#60a5fa', d:'#1d4ed8', bg:'#eff6ff', nav:'#dbeafe', grad:'#93c5fd' },
-  cyan:    { id:'cyan',    label:'Cyan',    p:'#0891b2', l:'#22d3ee', d:'#0e7490', bg:'#ecfeff', nav:'#cffafe', grad:'#67e8f9' },
-  rose:    { id:'rose',    label:'Rose',    p:'#e11d48', l:'#fb7185', d:'#be123c', bg:'#fff1f2', nav:'#ffe4e6', grad:'#fda4af' },
-  orange:  { id:'orange',  label:'Orange',  p:'#ea580c', l:'#fb923c', d:'#c2410c', bg:'#fff7ed', nav:'#ffedd5', grad:'#fdba74' },
-  emerald: { id:'emerald', label:'Emerald', p:'#059669', l:'#34d399', d:'#047857', bg:'#ecfdf5', nav:'#d1fae5', grad:'#6ee7b7' },
+  violet:  { id:'violet',  label:'Violet',  p:'#7e4ce6', l:'#a78bfa', d:'#5b21b6', bg:'#f5f3ff', nav:'#ede9fe', grad:'#c4b5fd' },
+  indigo:  { id:'indigo',  label:'Indigo',  p:'#5c54e0', l:'#818cf8', d:'#3730a3', bg:'#eef2ff', nav:'#e0e7ff', grad:'#a5b4fc' },
+  blue:    { id:'blue',    label:'Blue',    p:'#3b69e0', l:'#60a5fa', d:'#1d4ed8', bg:'#eff6ff', nav:'#dbeafe', grad:'#93c5fd' },
+  cyan:    { id:'cyan',    label:'Cyan',    p:'#1e8ba6', l:'#22d3ee', d:'#0e7490', bg:'#ecfeff', nav:'#cffafe', grad:'#67e8f9' },
+  rose:    { id:'rose',    label:'Rose',    p:'#db3b5a', l:'#fb7185', d:'#be123c', bg:'#fff1f2', nav:'#ffe4e6', grad:'#fda4af' },
+  orange:  { id:'orange',  label:'Orange',  p:'#e06524', l:'#fb923c', d:'#c2410c', bg:'#fff7ed', nav:'#ffedd5', grad:'#fdba74' },
+  emerald: { id:'emerald', label:'Emerald', p:'#1e8f6e', l:'#34d399', d:'#047857', bg:'#ecfdf5', nav:'#d1fae5', grad:'#6ee7b7' },
 };
 
 export type NavPage = 'Dashboard' | 'Sessions' | 'Tools' | 'Servers' | 'Settings' | 'Help';

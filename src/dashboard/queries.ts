@@ -3,6 +3,7 @@ import { getTotalActiveSessions } from '../services/session_limiter.js';
 import { getConsecutiveLlmFailures } from '../telemetry/llm_health.js';
 
 export type Range = '24h' | '7d' | '30d';
+export type BurnRange = '7d' | '14d' | '30d';
 
 export interface StatsResult {
     range: Range;
@@ -296,10 +297,40 @@ export async function fetchStats(range: Range): Promise<StatsResult> {
             createdAt:   new Date(r.created_at).toISOString(),
         })),
         system: {
-            activeSessions:        getTotalActiveSessions(),
+            activeSessions:        await getTotalActiveSessions(),
             memoryMb:              Math.round(process.memoryUsage().rss / 1024 / 1024),
             uptimeSeconds:         Math.round(process.uptime()),
             llmConsecutiveErrors:  getConsecutiveLlmFailures(),
         },
     };
+}
+
+const BURN_RANGE_INTERVAL: Record<BurnRange, string> = {
+    '7d':  '7 days',
+    '14d': '14 days',
+    '30d': '30 days',
+};
+
+export async function fetchBurnRate(range: BurnRange): Promise<{ bucket: string; tokens: number }[]> {
+    const pool = getDashboardPool();
+    const interval = BURN_RANGE_INTERVAL[range];
+    // generate_series fills every day in the range with 0 so bars are always present
+    const res = await pool.query(
+        `SELECT gs.day                                    AS bucket,
+                COALESCE(SUM(u.tokens_in + u.tokens_out), 0) AS tokens
+         FROM generate_series(
+                date_trunc('day', NOW() - $1::interval),
+                date_trunc('day', NOW()),
+                '1 day'::interval
+              ) AS gs(day)
+         LEFT JOIN usage_log u
+           ON date_trunc('day', u.created_at) = gs.day
+         GROUP BY gs.day
+         ORDER BY gs.day`,
+        [interval],
+    );
+    return res.rows.map(r => ({
+        bucket: new Date(r.bucket).toISOString(),
+        tokens: Number(r.tokens),
+    }));
 }

@@ -1,14 +1,15 @@
 import http from 'http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fetchStats, fetchSessions, fetchServers, fetchApprovals, fetchTools, type Range } from './queries.js';
+import { fetchStats, fetchSessions, fetchServers, fetchApprovals, fetchTools, fetchBurnRate, type Range, type BurnRange } from './queries.js';
 import { isDBConfigured } from '../database/db.js';
 
 // process.cwd() is /app in Docker and repo root in dev — both correct
 const DIST_DIR = path.resolve(process.cwd(), 'dist/public');
-const VALID_RANGES = new Set<Range>(['24h', '7d', '30d']);
+const VALID_RANGES      = new Set<Range>(['24h', '7d', '30d']);
+const VALID_BURN_RANGES = new Set<BurnRange>(['7d', '14d', '30d']);
 
-function serveFile(res: http.ServerResponse, filePath: string, isHashed = false): void {
+function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string, isHashed = false): void {
     if (!fs.existsSync(filePath)) {
         res.writeHead(404);
         res.end('Not found');
@@ -33,7 +34,9 @@ function serveFile(res: http.ServerResponse, filePath: string, isHashed = false)
         'Content-Type': mime[ext] ?? 'application/octet-stream',
         'Cache-Control': cacheControl,
     });
-    fs.createReadStream(filePath).pipe(res as unknown as NodeJS.WritableStream);
+    const stream = fs.createReadStream(filePath);
+    req.on('close', () => stream.destroy());
+    stream.pipe(res as unknown as NodeJS.WritableStream);
 }
 
 export async function handleDashboardRequest(
@@ -126,6 +129,31 @@ export async function handleDashboardRequest(
         return;
     }
 
+    // ── /api/burnrate ─────────────────────────────────────────────────────────
+    if (pathname === '/api/burnrate') {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        const rangeParam = url.searchParams.get('range') ?? '7d';
+        if (!VALID_BURN_RANGES.has(rangeParam as BurnRange)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_range', valid: ['7d', '14d', '30d'] }));
+            return;
+        }
+        try {
+            const data = await fetchBurnRate(rangeParam as BurnRange);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ data }));
+        } catch (err) {
+            console.error('[dashboard] /api/burnrate error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
     // ── /api/tools ───────────────────────────────────────────────────────────
     if (pathname === '/api/tools') {
         if (!isDBConfigured()) {
@@ -153,7 +181,7 @@ export async function handleDashboardRequest(
 
     // ── /dashboard (SPA root) ─────────────────────────────────────────────────
     if (pathname === '/dashboard' || pathname === '/dashboard/') {
-        serveFile(res, path.join(DIST_DIR, 'index.html'));
+        serveFile(req, res, path.join(DIST_DIR, 'index.html'));
         return;
     }
 
@@ -162,7 +190,7 @@ export async function handleDashboardRequest(
         const relative = pathname.replace('/dashboard/', '');
         // Assets under /assets/ are Vite content-hashed — safe to cache forever.
         const isHashed = relative.startsWith('assets/');
-        serveFile(res, path.join(DIST_DIR, relative), isHashed);
+        serveFile(req, res, path.join(DIST_DIR, relative), isHashed);
         return;
     }
 

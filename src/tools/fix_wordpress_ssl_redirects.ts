@@ -18,7 +18,7 @@ export const fixWordPressSslRedirectsTool: Tool = {
         'and injects the HTTPS server variable into wp-config.php to prevent ERR_TOO_MANY_REDIRECTS. ' +
         'Use this for: mixed-content warnings, Cloudflare Flexible SSL redirect loops, siteurl/home mismatch after adding SSL. ' +
         'Requires WP-CLI to be installed on the server.',
-    approvalTier: 2,
+    approvalTier: 3,
     parameters: {
         type: 'object',
         properties: {

@@ -45,7 +45,22 @@ SSE reconnect with replay buffer. If Cloud-Claw restarts mid-conversation the cl
 
 ## Phase 4 — Completed ✅
 
-Usage tracking per account. Every LLM call logged to `usage_log` (tokens in/out, cost, tool name, account ID). Monthly call caps enforced per plan (Starter: 100, Pro: 1000, Business: 10000). Report endpoint: `GET /api/usage/:accountId?period=YYYY-MM`.
+## Phase 4 — Completed ✅
+
+**What it is:** Track how many AI calls, token usage, and server actions each Cloudstick account uses per month. Every LLM call logged to `usage_log` (tokens in/out, cost, tool name, account ID).
+
+**Why it matters:** Without this, you cannot charge per usage or spot accounts using far more than they pay for.
+
+**What was built:**
+- Log each Cloud-Claw session to the existing `usage_log` table (tokens in/out, cost, tool name, account ID)
+- Build a report endpoint Cloudstick can call to get usage per account per billing period: `GET /api/usage/:accountId?period=YYYY-MM`
+- Enforce monthly call caps per plan (Starter: 100, Pro: 1000, Business: 10000)
+
+**Cost estimate (MiniMax 2.5, 20 servers troubleshooting daily):**
+~$13–20/month in API costs. The biggest variable is how much log output the AI reads — large log files inflate input token counts quickly. After the first week, check:
+```sql
+SELECT SUM(prompt_tokens), SUM(cost_usd) FROM usage_log;
+```
 
 ---
 

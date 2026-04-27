@@ -253,10 +253,13 @@ export const checkSslApiTool: Tool = {
             const client = getCloudstickClient();
             // Use server details to get SSL info (legacy /ssl/status/ endpoint doesn't exist)
             const response = await client.getServerDetails(String(args.server_id), userId());
-            const server = response?.message;
-            if (!server) {
-                return { success: false, output: `Server ID ${args.server_id} not found.` };
+            // Cloudstick V2 returns server directly; legacy might use .message
+            const server = response?.message ?? response;
+            
+            if (!server || (!server.id && !server.host_name)) {
+                return { success: false, output: `Server ID ${args.server_id} not found or API response invalid.` };
             }
+
             const sslInfo = {
                 is_ssl_installed: server.is_ssl_installed,
                 ssl_provider: server.ssl_provider,

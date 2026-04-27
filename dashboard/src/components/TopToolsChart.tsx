@@ -13,7 +13,9 @@ export function TopToolsChart({ data, theme }: Props) {
     return () => clearTimeout(t);
   }, []);
 
-  const TOOL_COLORS = [theme.p, '#06b6d4', '#22c55e', '#f59e0b'];
+  // Muted colors: reduced saturation ~12%
+  // Muted colors: -18% saturation
+  const TOOL_COLORS = [theme.p, '#5C94A6', '#4A8F6B', '#A67C3B'];
 
   const tools = data.length > 0
     ? data.slice(0, 4).map((d, i) => ({
@@ -61,6 +63,7 @@ function ToolRow({
           <span style={{
             width: 6, height: 6, borderRadius: '50%',
             background: t.color, display: 'inline-block', flexShrink: 0,
+            opacity: 0.85,
           }} />
           <span style={{
             fontSize: 10,
@@ -89,7 +92,9 @@ function ToolRow({
           height: '100%',
           background: t.color,
           borderRadius: 99,
-          transition: 'width 600ms cubic-bezier(0.34,1.56,0.64,1) 0.3s',
+          opacity: 0.8,
+          transition: `width 600ms cubic-bezier(0.34,1.56,0.64,1) 0.3s, filter 150ms ease`,
+          filter: hovered ? 'brightness(1.05)' : 'none',
         }} />
       </div>
     </div>

@@ -9,6 +9,7 @@
 
 import bolt from '@slack/bolt';
 const { App, LogLevel } = bolt;
+import { logger } from '../telemetry/logger.js';
 type SlackAppInstance = InstanceType<typeof App>;
 
 import { env } from '../config/env.js';
@@ -26,6 +27,24 @@ import { acquireSession, releaseSession } from '../services/session_limiter.js';
 
 let slackAppRef: SlackAppInstance | null = null;
 
+// ─── Per-session mutex ────────────────────────────────────────────────────────
+// Prevents concurrent Slack messages for the same session from running the
+// agent loop simultaneously and corrupting session history (CRIT-4).
+const sessionMutex = new Map<string, Promise<void>>();
+
+function withSessionMutex(sessionId: string, fn: () => Promise<void>): Promise<void> {
+    const prev = sessionMutex.get(sessionId) ?? Promise.resolve();
+    const next = prev.then(() => fn(), () => fn());
+    const silent = next.catch(() => {});
+    sessionMutex.set(sessionId, silent);
+    silent.then(() => {
+        if (sessionMutex.get(sessionId) === silent) {
+            sessionMutex.delete(sessionId);
+        }
+    });
+    return next;
+}
+
 export function createSlackApp(): SlackAppInstance {
     const app = new App({
         token: env.SLACK_BOT_TOKEN!,
@@ -40,7 +59,7 @@ export function createSlackApp(): SlackAppInstance {
     if (process.env.NODE_ENV === 'development') {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         app.use(async ({ payload, next }: any) => {
-            console.log(`[Slack-DIAGNOSTIC] Raw Event Inbound:`, JSON.stringify(payload).slice(0, 300));
+            logger.info('[Slack-DIAGNOSTIC] Raw Event Inbound', { payload: JSON.stringify(payload).slice(0, 300) });
             await next();
         });
     }
@@ -60,7 +79,7 @@ export function createSlackApp(): SlackAppInstance {
         if (!cloudstickUser) {
             // Fall back to legacy single-user whitelist for non-Cloudstick users
             if (env.SLACK_USER_ID && env.SLACK_USER_ID.startsWith('U') && user !== env.SLACK_USER_ID) {
-                console.warn(`[Slack] Ignored message from unauthorized user: ${user}`);
+                logger.warn('[Slack] Ignored message from unauthorized user', { user });
                 return;
             }
         }
@@ -70,7 +89,7 @@ export function createSlackApp(): SlackAppInstance {
             : `slack:${user}`;
         const lowerText = cleanText.toLowerCase().trim();
         const isContinueRequest = /^(?:@cloudclaw\s+)?(?:continue|keep going)\b/.test(lowerText);
-        console.log(`[Slack] Message from ${user} in ${channel}: ${cleanText.slice(0, 80)}`);
+        logger.info('[Slack] Message received', { user, channel, text: cleanText.slice(0, 80) });
 
         const onReply: ReplyFn = async (response, options) => {
             if (options?.blocks) {
@@ -86,24 +105,23 @@ export function createSlackApp(): SlackAppInstance {
 
         const onApproval: ApprovalFn = async (context) => {
             const { slackBlocks } = buildApprovalMessage(context);
-            console.log('[slack] onApproval called — approvalId:', context.approvalId);
-            console.log('[slack] Sending approval card to channel:', channel);
+            logger.info('[slack] onApproval called', { approvalId: context.approvalId, channel });
             try {
                 const result = await client.chat.postMessage({
                     channel,
                     text: '⚠️ Action requires confirmation (Proceed/Reject)',
                     blocks: slackBlocks,
                 });
-                console.log('[slack] Approval card sent — ts:', result.ts);
+                logger.info('[slack] Approval card sent', { ts: result.ts });
                 // HIGH-8: Store channel + ts so expiry job can update the card
                 if (result.ts) {
                     const { updateApprovalSlackInfo } = await import('../database/db.js');
                     await updateApprovalSlackInfo(context.approvalId, channel, result.ts).catch(err =>
-                        console.warn('[slack] Failed to save Slack card info:', err)
+                        logger.warn('[slack] Failed to save Slack card info', { err })
                     );
                 }
             } catch (err) {
-                console.error('[slack] FAILED to send approval card:', err);
+                logger.error('[slack] FAILED to send approval card', err instanceof Error ? err : undefined, { err });
                 await client.chat.postMessage({
                     channel,
                     text:
@@ -137,38 +155,40 @@ export function createSlackApp(): SlackAppInstance {
             const accountId = cloudstickUser?.cloudstick_account_id ?? `slack:${user}`;
             const planTier = cloudstickUser?.plan_tier ?? null;
 
-            if (!acquireSession(accountId, planTier)) {
-                await onReply('⚠️ You have reached the maximum number of concurrent sessions for your plan. Please wait for your current session to finish.');
-                return;
-            }
-
-            // CRIT-5: Hard 3-minute timeout per session
-            const controller = new AbortController();
-            const loopTimeout = setTimeout(() => {
-                controller.abort();
-                console.warn(`[Slack] Session ${sessionId} hard-aborted after 3 minutes`);
-            }, 3 * 60 * 1000);
-
-            const runLoop = () => runAgentLoop(
-                { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel, signal: controller.signal },
-                onReply,
-                onApproval,
-                indicator
-            );
-
-            try {
-                if (cloudstickUser) {
-                    await runWithCloudstickContext(cloudstickUser, runLoop);
-                } else {
-                    await runLoop();
+            await withSessionMutex(sessionId, async () => {
+                if (!acquireSession(accountId, planTier)) {
+                    await onReply('⚠️ You have reached the maximum number of concurrent sessions for your plan. Please wait for your current session to finish.');
+                    return;
                 }
-            } finally {
-                clearTimeout(loopTimeout);
-                releaseSession(accountId);
-            }
+
+                // CRIT-5: Hard 3-minute timeout per session
+                const controller = new AbortController();
+                const loopTimeout = setTimeout(() => {
+                    controller.abort();
+                    logger.warn('[Slack] Session hard-aborted after 3 minutes', { sessionId });
+                }, 3 * 60 * 1000);
+
+                const runLoop = () => runAgentLoop(
+                    { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel, signal: controller.signal },
+                    onReply,
+                    onApproval,
+                    indicator
+                );
+
+                try {
+                    if (cloudstickUser) {
+                        await runWithCloudstickContext(cloudstickUser, runLoop);
+                    } else {
+                        await runLoop();
+                    }
+                } finally {
+                    clearTimeout(loopTimeout);
+                    releaseSession(accountId);
+                }
+            });
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            console.error('[Slack] Loop error:', errMsg);
+            logger.error('[Slack] Loop error', err instanceof Error ? err : undefined, { errMsg });
             await say(`❌ Unexpected error: ${errMsg}`);
         }
     };
@@ -196,7 +216,7 @@ export function createSlackApp(): SlackAppInstance {
                     await say(`_🎙 Transcribed:_ ${transcribedText}`);
                     text = text ? `${text}\n${transcribedText}` : transcribedText;
                 } catch (err) {
-                    console.error('[Slack] Voice processing error:', err);
+                    logger.error('[Slack] Voice processing error', err instanceof Error ? err : undefined, { err });
                     await say('❌ Failed to transcribe audio.');
                     return;
                 }
@@ -333,7 +353,7 @@ export function createSlackApp(): SlackAppInstance {
                         }],
                     },
                 ],
-            }).catch(err => console.warn('[slack] select_server chat.update failed:', err));
+            }).catch(err => logger.warn('[slack] select_server chat.update failed', { err }));
         }
 
         // Build a say-compatible wrapper for handleMessage
@@ -373,7 +393,7 @@ export function createSlackApp(): SlackAppInstance {
                         }],
                     },
                 ],
-            }).catch(err => console.warn('[slack] clarification_cancel chat.update failed:', err));
+            }).catch(err => logger.warn('[slack] clarification_cancel chat.update failed', { err }));
         }
     });
 
@@ -402,7 +422,7 @@ export function createSlackApp(): SlackAppInstance {
                         }],
                     },
                 ],
-            }).catch(err => console.warn('[slack] clarification_proceed chat.update failed:', err));
+            }).catch(err => logger.warn('[slack] clarification_proceed chat.update failed', { err }));
         }
 
         const sessionId = `slack:${userId}`;
@@ -448,18 +468,18 @@ export function createSlackApp(): SlackAppInstance {
 export async function startSlackApp(app: SlackAppInstance): Promise<SlackAppInstance | null> {
     try {
         await app.start();
-        console.log('[Slack] Socket Mode connected ✓');
+        logger.info('[Slack] Socket Mode connected');
         return app;
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error('[Slack] Failed to start Slack Socket Mode (offline?):', msg);
+        logger.error('[Slack] Failed to start Slack Socket Mode (offline?)', err instanceof Error ? err : undefined, { msg });
         return null;
     }
 }
 
 export async function sendSlackMessage(channel: string, text: string): Promise<void> {
     if (!slackAppRef) {
-        console.warn('[Slack] sendSlackMessage called before Slack app initialization');
+        logger.warn('[Slack] sendSlackMessage called before Slack app initialization');
         return;
     }
 

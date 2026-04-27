@@ -80,7 +80,7 @@ export const manageDnsRecordsTool: Tool = {
         'Use list first to get record IDs needed for update and delete. ' +
         'Requires CLOUDFLARE_API_TOKEN in .env. ' +
         'zone_id can be passed explicitly or falls back to CLOUDFLARE_ZONE_ID in .env.',
-    approvalTier: 2,
+    approvalTier: 3,
     parameters: {
         type: 'object',
         properties: {

@@ -3,7 +3,6 @@ import { URL } from 'url';
 import cron from 'node-cron';
 import { env } from '../config/env.js';
 import { isDBConfigured, getPool } from '../database/db.js';
-import { getTotalActiveSessions } from '../services/session_limiter.js';
 import { getConsecutiveLlmFailures } from './llm_health.js';
 
 // MED-11: Dedup restart alerts — don't flood if PM2 enters a crash loop

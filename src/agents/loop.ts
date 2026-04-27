@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { logger } from '../telemetry/logger.js';
 /**
  * Agentic Reasoning Loop
  *
@@ -341,7 +342,7 @@ export async function runAgentLoop(
             resolvedUser = user;
         }
     } catch (err) {
-        console.warn('[loop] User credential lookup failed (non-fatal):', err);
+        logger.warn('[loop] User credential lookup failed (non-fatal)', { err });
     }
 
     return runWithCloudstickContext(resolvedUser, () =>
@@ -358,7 +359,7 @@ async function _runAgentLoopCore(
     // CRIT-6: Session mutex — queue if another loop is active for this session
     const existing = _sessionMutex.get(message.sessionId);
     if (existing) {
-        console.log(`[loop] Session ${message.sessionId} busy — queuing message`);
+        logger.info('[loop] Session busy — queuing message', { sessionId: message.sessionId });
         await existing;
     }
     let _resolveMutex!: () => void;
@@ -391,7 +392,7 @@ async function _runAgentLoopBody(
         .filter((msg: any, idx: number) => {
             // Drop stray system messages in history (providers reject mid-stream system role)
             if (msg.role === 'system') {
-                console.warn(`[loop] Dropping historical system message at index ${idx} to satisfy provider role constraints`);
+                logger.warn('[loop] Dropping historical system message to satisfy provider role constraints', { idx });
                 return false;
             }
             return true;
@@ -411,7 +412,7 @@ async function _runAgentLoopBody(
                 // Check for malformed tool_calls that are missing an ID (MiniMax hallucination)
                 const isBroken = clean.tool_calls.some((tc: any) => !tc.id);
                 if (isBroken) {
-                    console.warn('[loop] Found broken tool_calls without an ID in history, removing them.');
+                    logger.warn('[loop] Found broken tool_calls without an ID in history, removing them');
                     delete clean.tool_calls;
                 } else {
                     clean.tool_calls = clean.tool_calls.map((tc: any) => {
@@ -473,7 +474,7 @@ async function _runAgentLoopBody(
         executionReceipts = new Map<string, ToolReceipt>();
         suppressedTools = new Set<string>();
         clearTroubleshootingSession(message.sessionId);
-        console.log('[loop] New user intent detected — cleared previous receipts and troubleshooting history');
+        logger.info('[loop] New user intent detected — cleared previous receipts and troubleshooting history');
     } else {
         executionReceipts = loadReceiptsFromSession(session?.receipts);
         // Load suppressed tools from session JSONB so they persist across workers and HITL resume
@@ -491,7 +492,7 @@ async function _runAgentLoopBody(
                     outputHash: 'resume-seed',
                 });
             }
-            console.log(`[loop] Seeded receipt from resume: ${t}`);
+            logger.info('[loop] Seeded receipt from resume', { toolName: t });
         }
     }
 
@@ -521,7 +522,7 @@ async function _runAgentLoopBody(
     // where a tool response was left orphaned without its assistant tool_call.
     while (messages.length > 0 && messages[0].role === 'tool') {
         messages.shift();
-        console.log('[loop] Shifted orphaned tool message from beginning of history');
+        logger.info('[loop] Shifted orphaned tool message from beginning of history');
     }
 
     // If the user is sending a new message (not a resume) and the session has many
@@ -536,7 +537,7 @@ async function _runAgentLoopBody(
             startIndex--;
         }
         messages = messages.slice(startIndex);
-        console.log(`[loop] Trimmed session safely to ${messages.length} messages`);
+        logger.info('[loop] Trimmed session safely', { messageCount: messages.length });
     }
 
     // ─── Fix #12: Server disambiguation for generic prompts ────────────────
@@ -546,7 +547,7 @@ async function _runAgentLoopBody(
         const serverFromText = await resolveServerFromMessage(message.text);
         if (serverFromText) {
             resolvedServer = serverFromText.label;
-            console.log(`[loop] Server resolved via deterministic fallback: ${resolvedServer}`);
+            logger.info('[loop] Server resolved via deterministic fallback', { resolvedServer });
         }
     }
 
@@ -605,10 +606,10 @@ async function _runAgentLoopBody(
 
             if (combined.length > 0) {
                 pastFixesStr = formatFixesForPrompt(combined);
-                console.log(`[loop] Found ${combined.length} past fix(es) for system prompt`);
+                logger.info('[loop] Found past fixes for system prompt', { count: combined.length });
             }
         } catch (err) {
-            console.warn('[loop] Fix memory fetch failed (non-fatal):', err);
+            logger.warn('[loop] Fix memory fetch failed (non-fatal)', { err });
         }
     }
 
@@ -671,20 +672,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     .join('\n');
             }
         } catch (err) {
-            console.warn('[loop] Failed to fetch live Cloudstick servers for system prompt:', err instanceof Error ? err.message : String(err));
+            logger.warn('[loop] Failed to fetch live Cloudstick servers for system prompt', { err: err instanceof Error ? err.message : String(err) });
         }
     }
 
     while (iteration < MAX_ITERATIONS) {
         // CRIT-5: Hard timeout — abort signal set by Slack/Telegram caller
         if (message.signal?.aborted) {
-            console.warn(`[loop] Aborted by timeout signal — session: ${message.sessionId}`);
+            logger.warn('[loop] Aborted by timeout signal', { sessionId: message.sessionId });
             await onReply('⏱️ Request timed out (3 min limit). Please try again.');
             break;
         }
 
         iteration++;
-        console.log(`[loop] Iteration ${iteration}/${MAX_ITERATIONS} — session: ${message.sessionId}`);
+        logger.info('[loop] Iteration', { iteration, maxIterations: MAX_ITERATIONS, sessionId: message.sessionId });
 
         // Fix #11: Base prompt is built inside the loop so clarification block stays fresh
         const troubleshootingContext = getStrategyContext(message.sessionId);
@@ -714,51 +715,51 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         let toolChoice: OpenAI.ChatCompletionToolChoiceOption;
         if (shouldPauseForClarification && iteration === 1) {
             toolChoice = 'none';
-            console.log('[loop] Forcing tool_choice: none (long conversation clarification gate)');
+            logger.info('[loop] Forcing tool_choice: none (long conversation clarification gate)');
         } else if (requiresCloudstickConnection && iteration === 1 && !hasReceipt(executionReceipts, 'check_cloudstick_connection', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'check_cloudstick_connection' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: check_cloudstick_connection (explicit Cloudstick connectivity check detected)');
+            logger.info('[loop] Forcing tool_choice: check_cloudstick_connection (explicit Cloudstick connectivity check detected)');
         } else if (requiresCloudflarePurge && iteration === 1 && !hasReceipt(executionReceipts, 'cloudflare_cache_purge', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'cloudflare_cache_purge' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: cloudflare_cache_purge (explicit cache purge request detected)');
+            logger.info('[loop] Forcing tool_choice: cloudflare_cache_purge (explicit cache purge request detected)');
         } else if (requiresDomainDiagnosis && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_domain', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'diagnose_domain' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: diagnose_domain (domain routing query detected)');
+            logger.info('[loop] Forcing tool_choice: diagnose_domain (domain routing query detected)');
         } else if (requiresSslCheck && iteration === 1 && !hasReceipt(executionReceipts, 'check_ssl_api', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'check_ssl_api' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: check_ssl_api (SSL status query detected)');
+            logger.info('[loop] Forcing tool_choice: check_ssl_api (SSL status query detected)');
         } else if (requiresWebsiteList && iteration === 1 && !hasReceipt(executionReceipts, 'get_cloudstick_websites', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'get_cloudstick_websites' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: get_cloudstick_websites (website listing query detected)');
+            logger.info('[loop] Forcing tool_choice: get_cloudstick_websites (website listing query detected)');
         } else if (requiresServerDetails && iteration === 1 && !hasReceipt(executionReceipts, 'get_server_details', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'get_server_details' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: get_server_details (server details query detected)');
+            logger.info('[loop] Forcing tool_choice: get_server_details (server details query detected)');
         } else if (requiresWpDetails && iteration === 1 && !hasReceipt(executionReceipts, 'get_wordpress_details', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'get_wordpress_details' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: get_wordpress_details (WordPress details query detected)');
+            logger.info('[loop] Forcing tool_choice: get_wordpress_details (WordPress details query detected)');
         } else if (requiresWpDbFix && iteration === 1 && !hasReceipt(executionReceipts, 'fix_wordpress_db', true, RECEIPT_FRESHNESS_MS)) {
             toolChoice = canRequireTool
                 ? { type: 'function', function: { name: 'fix_wordpress_db' } }
                 : 'auto';
-            console.log('[loop] Forcing tool_choice: fix_wordpress_db (WordPress Access Denied DB error detected)');
+            logger.info('[loop] Forcing tool_choice: fix_wordpress_db (WordPress Access Denied DB error detected)');
         } else if (requiresNginx && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
             // Fix #8: soft suggestion — require A tool but don't mandate which one
             toolChoice = shouldRequireTool ? 'required' : 'auto';
-            console.log('[loop] Nginx hint injected into prompt — requiring a tool call (soft, not forced)');
+            logger.info('[loop] Nginx hint injected into prompt — requiring a tool call (soft, not forced)');
         } else {
             toolChoice = shouldRequireTool ? 'required' : 'auto';
         }
@@ -780,7 +781,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 });
             } else if (msg.role === 'tool') {
                 if (!msg.tool_call_id || !globalValidToolIds.has(msg.tool_call_id)) {
-                    console.warn(`[loop] Dropping globally orphaned tool message with ID ${msg.tool_call_id}`);
+                    logger.warn('[loop] Dropping globally orphaned tool message', { toolCallId: msg.tool_call_id });
                     return false;
                 }
             }
@@ -805,14 +806,14 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     });
                 } else if (msg.role === 'tool') {
                     if (!msg.tool_call_id || !trimmedValidToolIds.has(msg.tool_call_id)) {
-                        console.warn(`[loop] Dropping orphaned tool message from trimmed window with ID ${msg.tool_call_id}`);
+                        logger.warn('[loop] Dropping orphaned tool message from trimmed window', { toolCallId: msg.tool_call_id });
                         return false;
                     }
                 }
                 return true;
             });
 
-            console.log(`[loop] Outgoing messages to API (trimmed from ${messages.length} to ${trimmedMessages.length})`);
+            logger.info('[loop] Outgoing messages to API', { from: messages.length, to: trimmedMessages.length });
 
             const LLM_TIMEOUT_MS = 60_000;
 
@@ -852,7 +853,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             // Retry once if provider returned empty choices (e.g. MiniMax content filter / rate limit)
             // Relax tool_choice to 'auto' in case the forced tool was the trigger.
             if (!Array.isArray((response as any).choices) || (response as any).choices.length === 0) {
-                console.warn('[loop] Provider returned empty choices — retrying once with tool_choice: auto');
+                logger.warn('[loop] Provider returned empty choices — retrying once with tool_choice: auto');
                 await new Promise(res => setTimeout(res, 1500));
                 response = await callWithTimeout({
                     model: activeModel,
@@ -889,11 +890,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             recordLlmFailure();
             recordLLMProviderFailure();
             const msg = err instanceof Error ? err.message : String(err);
-            console.error('[loop] LLM error:', msg);
+            logger.error('[loop] LLM error', err instanceof Error ? err : undefined, { msg });
             if (err.error?.failed_generation) {
-                console.error('[loop] Failed generation:', err.error.failed_generation);
+                logger.error('[loop] Failed generation', undefined, { failedGeneration: err.error.failed_generation });
             } else if (err.failed_generation) {
-                console.error('[loop] Failed generation:', err.failed_generation);
+                logger.error('[loop] Failed generation', undefined, { failedGeneration: err.failed_generation });
             }
             await indicator?.stop();
             await onReply(`❌ LLM error: ${msg}`);
@@ -937,8 +938,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             const isHallucination = checkForHallucination(text, executionReceipts, RECEIPT_FRESHNESS_MS, lastToolExecutionHost ?? undefined);
 
             if (isHallucination) {
-                console.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution');
-                console.error('[loop] Execution receipts so far:', [...executionReceipts.keys()]);
+                logger.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution', undefined, { receipts: [...executionReceipts.keys()] });
                 await indicator?.update('⚠️ Need real diagnostics — re-running with tools...');
                 await onReply('⚠️ I need to verify this with real diagnostics. Running tools now — you may see a short pause.');
                 messages.push({ role: 'assistant', content: text });
@@ -957,8 +957,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 : text;
 
             if (requiresTool && executionReceipts.size === 0) {
-                console.error('[loop] LLM avoided tool call despite tool_choice:required — possible provider issue or missing tool');
-                console.error('[loop] Raw text returned instead of tool call:', text);
+                logger.error('[loop] LLM avoided tool call despite tool_choice:required — possible provider issue or missing tool', undefined, { text });
             }
 
             await indicator?.stop();
@@ -972,13 +971,13 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
         for (const toolCall of choice.message.tool_calls) {
             if (!toolCall.id) {
-                console.warn('[loop] Tool call missing ID — skipping to prevent message history corruption');
+                logger.warn('[loop] Tool call missing ID — skipping to prevent message history corruption');
                 continue;
             }
 
             const toolName = toolCall.function?.name;
             if (!toolName) {
-                console.warn('[loop] Received tool call without a function name, skipping.');
+                logger.warn('[loop] Received tool call without a function name, skipping');
                 continue;
             }
 
@@ -989,7 +988,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     toolArgs = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
                 }
             } catch {
-                console.warn(`[loop] Failed to parse args for ${toolName}:`, toolCall.function?.arguments);
+                logger.warn('[loop] Failed to parse args', { toolName, args: toolCall.function?.arguments });
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -998,7 +997,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 continue;
             }
 
-            console.log(`[loop] Tool called: ${toolName}`, toolArgs);
+            logger.info('[loop] Tool called', { toolName, toolArgs });
             await indicator?.update(`⚙️ Running ${toolName}... please wait.`);
 
             const tool = getToolByName(toolName);
@@ -1013,7 +1012,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             // ─── Suppression guard: block tools made redundant by a prior API tool ─
             if (suppressedTools.has(toolName)) {
-                console.warn(`[loop] SUPPRESSED: "${toolName}" is redundant after a prior API tool in this session`);
+                logger.warn('[loop] SUPPRESSED: tool is redundant after a prior API tool in this session', { toolName });
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -1053,7 +1052,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             ?? await getServerByIp(resolvedServer);
                         if (server) {
                             hydrateServerToolArgs(toolArgs, server);
-                            console.log(`[loop] Hydrated tool target from user intent: ${server.label} (${server.ip})`);
+                            logger.info('[loop] Hydrated tool target from user intent', { label: server.label, ip: server.ip });
                         }
                     } else {
                         // No server explicitly specified by the LLM
@@ -1089,7 +1088,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             // AUDIT GUARD — code-level, cannot be overridden by LLM
             if (intent.isAudit && getWriteTools().has(toolName)) {
-                console.warn(`[loop] AUDIT GUARD blocked write tool "${toolName}" during audit`);
+                logger.warn('[loop] AUDIT GUARD blocked write tool during audit', { toolName });
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -1125,7 +1124,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             if (toolName === 'execute_ssh_write' && ('path' in toolArgs || 'file_path' in toolArgs)) {
                 const writeGuardReason = checkWriteTarget(toolArgs as any);
                 if (writeGuardReason) {
-                    console.warn(`[loop] SSH write path guard blocked: ${writeGuardReason}`);
+                    logger.warn('[loop] SSH write path guard blocked', { reason: writeGuardReason });
                     messages.push({
                         role: 'tool',
                         tool_call_id: toolCall.id,
@@ -1148,9 +1147,9 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         // because the legacy parser splits on `|` and misinterprets the hash as a key=value arg.
                         const argsWithHash = { ...encodeApprovalArgs(toolArgs), __stateHash: stateHash };
                         toolApproval.command = encodeToolApprovalCommand(toolName, argsWithHash);
-                        console.log(`[loop] State hash captured for ${toolName}: ${stateHash}`);
+                        logger.info('[loop] State hash captured', { toolName, stateHash });
                     } catch (err) {
-                        console.warn(`[loop] getCurrentState failed for ${toolName}, skipping hash:`, err);
+                        logger.warn('[loop] getCurrentState failed, skipping hash', { toolName, err });
                     }
                 }
 
@@ -1231,7 +1230,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
                 // Block write commands during audit
                 if (intent.isAudit && rawCommand && isWriteCommand(rawCommand)) {
-                    console.warn(`[loop] AUDIT GUARD blocked write command during audit: ${rawCommand}`);
+                    logger.warn('[loop] AUDIT GUARD blocked write command during audit', { rawCommand });
                     messages.push({
                         role: 'tool',
                         tool_call_id: toolCall.id,
@@ -1349,7 +1348,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 continue;
             }
             try {
-                console.log(`[loop] ⚡ EXECUTING TOOL: ${toolName} on target: ${String(toolArgs.server_label ?? toolArgs.host ?? 'N/A')}`);
+                logger.info('[loop] Executing tool', { toolName, target: String(toolArgs.server_label ?? toolArgs.host ?? 'N/A') });
                 if (toolArgs.server_label === 'all') {
                     const servers = await resolveAllServers();
                     // Fix #6: wrap each fanout promise in a 30s timeout
@@ -1388,7 +1387,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                         message.text ?? '',
                         `${toolName}: ${JSON.stringify(toolArgs)}`,
                         toolName,
-                    ).catch(err => console.warn('[loop] saveFix failed (non-fatal):', err));
+                    ).catch(err => logger.warn('[loop] saveFix failed (non-fatal)', { err }));
                 }
 
                 // ─── Register suppressed tools after successful API tool ───────────
@@ -1397,25 +1396,25 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 if (result.success && tool.suppressTools) {
                     for (const suppressed of tool.suppressTools) {
                         suppressedTools.add(suppressed);
-                        console.log(`[loop] Suppressing redundant tool: ${suppressed} (suppressed by ${toolName})`);
+                        logger.info('[loop] Suppressing redundant tool', { suppressed, suppressedBy: toolName });
                     }
                 }
             } catch (toolErr: unknown) {
                 const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
-                console.error(`[loop] ❌ TOOL THREW: ${toolName} — ${errMsg}`);
+                logger.error('[loop] Tool threw an unexpected error', toolErr instanceof Error ? toolErr : undefined, { toolName, errMsg });
                 result = { success: false, output: `Tool "${toolName}" threw an unexpected error: ${errMsg}` };
             }
 
             // Sanitize once for both success and error paths
             const sanitized = sanitizeToolOutput(result.output);
             if (sanitized.injections.length > 0) {
-                console.warn(`[loop] postToolGuard: blocked injection patterns: ${sanitized.injections.join(', ')}`);
+                logger.warn('[loop] postToolGuard: blocked injection patterns', { injections: sanitized.injections });
             }
             if (sanitized.masked) {
-                console.warn('[loop] postToolGuard: secrets were masked from tool output before storing');
+                logger.warn('[loop] postToolGuard: secrets were masked from tool output before storing');
             }
             sanitizedOutput = sanitized.output;
-            console.log(`[loop] ✅ TOOL COMPLETE: ${toolName} — success=${result.success}, output length: ${sanitized.output.length} chars`);
+            logger.info('[loop] Tool complete', { toolName, success: result.success, outputLength: sanitized.output.length });
 
             // For diagnose_nginx, if it successfully found a path, use its hash so fix_nginx_config can verify it
             let receiptOutputOrHash = sanitizedOutput || result.output;
@@ -1473,8 +1472,8 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 }
             }
 
-            if (identicalCount >= 2) { 
-                 console.warn(`[loop] 🛑 LOOP GUARD BLOCKED: ${toolName} with identical args repeated 3 times.`);
+            if (identicalCount >= 2) {
+                 logger.warn('[loop] LOOP GUARD BLOCKED: tool with identical args repeated 3 times', { toolName });
                  messages.push({
                      role: 'tool',
                      tool_call_id: toolCall.id,
@@ -1495,7 +1494,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 const fileMatch = (sanitizedOutput || result.output).match(/in\s+(\/etc\/nginx\/[^\s:]+)[:|\s]/i);
                 const foundFilePath = fileMatch![1];
 
-                console.log(`[loop] Auto-chain: diagnose found error in ${foundFilePath} — requesting approval for fix_nginx_config`);
+                logger.info('[loop] Auto-chain: diagnose found error — requesting approval for fix_nginx_config', { foundFilePath });
                 const fixTool = getToolByName('fix_nginx_config');
                 if (fixTool) {
                     const fixArgs: Record<string, unknown> = {
@@ -1507,7 +1506,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
                     // Check receipt pre-condition: diagnose_nginx must have succeeded on same host
                     if (!hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS, receiptHost)) {
-                        console.warn('[loop] Auto-chain: diagnose_nginx receipt check failed despite just running — skipping');
+                        logger.warn('[loop] Auto-chain: diagnose_nginx receipt check failed despite just running — skipping');
                     } else {
                         // Route through the approval gate — fix_nginx_config is Tier-3
                         const fixApproval = getToolApprovalRequest('fix_nginx_config', fixArgs);
@@ -1590,7 +1589,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             return; // PAUSE — wait for HITL
                         } else {
                             // No approval required (shouldn't happen for Tier-3, but safety fallback)
-                            console.warn('[loop] Auto-chain: fix_nginx_config did not require approval — executing directly');
+                            logger.warn('[loop] Auto-chain: fix_nginx_config did not require approval — executing directly');
 
                             // Audit Guard for direct execution
                             if (intent.isAudit && getWriteTools().has('fix_nginx_config')) {
@@ -1637,7 +1636,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             recordReceipt(executionReceipts, 'fix_nginx_config', fixResult.success, receiptHost, fixSanitized.output);
                             lastToolExecutionHost = receiptHost;
                             currentLegCounts.set('fix_nginx_config', (currentLegCounts.get('fix_nginx_config') ?? 0) + 1);
-                            console.log(`[loop] ✅ AUTO-CHAIN COMPLETE: fix_nginx_config — success=${fixResult.success}`);
+                            logger.info('[loop] Auto-chain complete: fix_nginx_config', { success: fixResult.success });
                         }
                     }
                 }
@@ -1646,7 +1645,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
         // ─── Adaptive escalation: stop if troubleshooting is stuck ─────────
         if (shouldEscalate(message.sessionId)) {
-            console.warn('[loop] Troubleshooting tracker triggered escalation — strategies exhausted or too many consecutive failures');
+            logger.warn('[loop] Troubleshooting tracker triggered escalation — strategies exhausted or too many consecutive failures');
             await indicator?.stop();
             const escalation = getEscalationSummary(message.sessionId);
             messages.push({ role: 'assistant', content: escalation });
@@ -1659,7 +1658,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
     // Guard: hit max iterations
     if (iteration >= MAX_ITERATIONS) {
-        console.warn('[loop] Max iterations reached');
+        logger.warn('[loop] Max iterations reached', { iteration });
         await indicator?.stop();
         const escalationText =
             `⚠️ Complex issue — reached reasoning limit after ${iteration} steps.\n\n`
@@ -1671,7 +1670,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 const { sendSlackMessage } = await import('../interfaces/slack.js');
                 await sendSlackMessage(String(message.replyTarget ?? session?.reply_target), escalationText);
             } catch (err) {
-                console.warn('[loop] Failed to send Slack escalation directly, falling back to onReply:', err);
+                logger.warn('[loop] Failed to send Slack escalation directly, falling back to onReply', { err });
                 await onReply(escalationText);
             }
         } else {

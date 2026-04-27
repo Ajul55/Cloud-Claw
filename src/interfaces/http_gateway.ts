@@ -10,6 +10,7 @@ import { runWithCloudstickContext } from '../api/cloudstick_context.js';
 import { acquireSession, releaseSession, isMonthlyCapReached } from '../services/session_limiter.js';
 import { getPool, isDBConfigured } from '../database/db.js';
 import { logger } from '../telemetry/logger.js';
+import { isRedisConfigured, getRedisPublisher, createRedisSubscriber } from '../services/redis_client.js';
 import type { ReplyFn, ApprovalFn, IncomingMessage } from '../tools/types.js';
 
 type PlanTier = 'starter' | 'pro' | 'business';
@@ -58,13 +59,18 @@ function checkRateLimit(accountId: string, plan: string): boolean {
     return true;
 }
 
-// Per-session SSE event bus
-const sessionBus = new Map<string, EventEmitter>();
+// ── SSE event bus ────────────────────────────────────────────────────────────
+//
+// When REDIS_URL is set: Redis pub/sub enables PM2 cluster mode and
+// cross-instance streaming. Replay buffer stored in Redis LISTs.
+//
+// When REDIS_URL is unset: in-memory EventEmitter (single-instance only).
 
-// ── Phase 3: replay buffer ─────────────────────────────────────────────────────
-// Stores the last MAX_REPLAY events per session so reconnecting clients can
-// catch up without missing chunks. Keyed by sessionId, cleared 30s after close.
 const MAX_REPLAY = 50;
+const SESSION_REPLAY_TTL_S = 300; // 5 min while active, 30 s after close
+const REDIS_CH = 'cloudclaw:session:';
+const REDIS_REPLAY = 'cloudclaw:replay:';
+const REDIS_SEQ = 'cloudclaw:seq:';
 
 interface ReplayEvent {
     id: string;
@@ -72,22 +78,10 @@ interface ReplayEvent {
     data: object;
 }
 
+// In-memory state (fallback when Redis is not configured)
+const sessionBus = new Map<string, EventEmitter>();
 const replayBuffer = new Map<string, ReplayEvent[]>();
 const sessionSeq = new Map<string, number>();
-
-function nextEventId(sessionId: string): string {
-    const seq = (sessionSeq.get(sessionId) ?? 0) + 1;
-    sessionSeq.set(sessionId, seq);
-    return `${sessionId}:${seq}`;
-}
-
-function appendReplay(sessionId: string, entry: ReplayEvent): void {
-    const buf = replayBuffer.get(sessionId) ?? [];
-    buf.push(entry);
-    if (buf.length > MAX_REPLAY) buf.shift();
-    replayBuffer.set(sessionId, buf);
-}
-// ──────────────────────────────────────────────────────────────────────────────
 
 function getBus(sessionId: string): EventEmitter {
     if (!sessionBus.has(sessionId)) {
@@ -98,18 +92,50 @@ function getBus(sessionId: string): EventEmitter {
     return sessionBus.get(sessionId)!;
 }
 
-function emitSSE(sessionId: string, event: string, data: object): void {
-    const id = nextEventId(sessionId);
-    const entry: ReplayEvent = { id, event, data };
-    appendReplay(sessionId, entry);
+async function emitSSE(sessionId: string, event: string, data: object): Promise<void> {
+    if (isRedisConfigured()) {
+        const redis = getRedisPublisher();
+        const replayKey = `${REDIS_REPLAY}${sessionId}`;
+        const seqKey = `${REDIS_SEQ}${sessionId}`;
+        const seq = await redis.incr(seqKey);
+        const entry: ReplayEvent = { id: `${sessionId}:${seq}`, event, data };
+        const serialized = JSON.stringify(entry);
+        // Pipeline: store in replay list first, then publish so subscribers
+        // fetching replay on reconnect always see the event.
+        await redis.pipeline()
+            .rpush(replayKey, serialized)
+            .ltrim(replayKey, -MAX_REPLAY, -1)
+            .expire(replayKey, SESSION_REPLAY_TTL_S)
+            .expire(seqKey, SESSION_REPLAY_TTL_S)
+            .publish(`${REDIS_CH}${sessionId}`, serialized)
+            .exec();
+        return;
+    }
+    // In-memory fallback
+    const seq = (sessionSeq.get(sessionId) ?? 0) + 1;
+    sessionSeq.set(sessionId, seq);
+    const entry: ReplayEvent = { id: `${sessionId}:${seq}`, event, data };
+    const buf = replayBuffer.get(sessionId) ?? [];
+    buf.push(entry);
+    if (buf.length > MAX_REPLAY) buf.shift();
+    replayBuffer.set(sessionId, buf);
     getBus(sessionId).emit('sse', entry);
 }
 
-function closeBus(sessionId: string): void {
+async function closeBus(sessionId: string): Promise<void> {
+    if (isRedisConfigured()) {
+        const redis = getRedisPublisher();
+        // Keep replay alive 30 s so reconnecting clients can catch up
+        await Promise.all([
+            redis.expire(`${REDIS_REPLAY}${sessionId}`, 30),
+            redis.expire(`${REDIS_SEQ}${sessionId}`, 30),
+        ]);
+        return;
+    }
+    // In-memory fallback
     getBus(sessionId).emit('close');
     sessionBus.delete(sessionId);
     sessionSeq.delete(sessionId);
-    // Keep replay buffer alive for 30 s so reconnecting clients can catch up
     setTimeout(() => { replayBuffer.delete(sessionId); }, 30_000);
 }
 
@@ -236,9 +262,10 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
     const sessionId = `cloudstick:${accountId}`;
     const user = await upsertCloudstickUser(accountId, plan);
 
-    const onReply: ReplyFn = async (text) => emitSSE(sessionId, 'chunk', { text });
-    const onApproval: ApprovalFn = async ({ approvalId, command, targetHost, rationale }) =>
-        emitSSE(sessionId, 'approval_required', { approvalId, action: command, host: targetHost, rationale });
+    const onReply: ReplyFn = async (text) => { await emitSSE(sessionId, 'chunk', { text }); };
+    const onApproval: ApprovalFn = async ({ approvalId, command, targetHost, rationale }) => {
+        await emitSSE(sessionId, 'approval_required', { approvalId, action: command, host: targetHost, rationale });
+    };
 
     const msg: IncomingMessage = {
         sessionId,
@@ -249,7 +276,7 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
     };
 
     // ── Phase 2: concurrent session limit ────────────────────────────────────
-    if (!acquireSession(accountId, plan)) {
+    if (!await acquireSession(accountId, plan)) {
         return json(res, 429, {
             error: 'TOO_MANY_SESSIONS',
             message: 'You have reached the maximum number of concurrent sessions for your plan. Please wait for your current session to finish.',
@@ -258,7 +285,7 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
 
     // ── Phase 4: monthly call cap ─────────────────────────────────────────────
     if (await isMonthlyCapReached(accountId, plan)) {
-        releaseSession(accountId);
+        await releaseSession(accountId);
         return json(res, 429, {
             error: 'MONTHLY_CAP_REACHED',
             message: 'You have reached your monthly LLM call limit. Please upgrade your plan or wait until next month.',
@@ -267,26 +294,25 @@ async function handlePostChat(req: http.IncomingMessage, res: http.ServerRespons
 
     // ── ARCH-4: per-session in-flight request limit ───────────────────────────
     if (!acquireSessionSlot(sessionId)) {
-        releaseSession(accountId);
+        await releaseSession(accountId);
         return json(res, 429, { error: 'SESSION_BUSY', message: 'Session busy, try again shortly' });
     }
 
     // Run agent loop in background — don't block the POST response
     const sessionTimeout = setTimeout(() => {
         console.warn('[gateway] Session', sessionId, 'exceeded 5-minute timeout — force closing bus');
-        emitSSE(sessionId, 'error', { message: 'Session timed out.' });
-        closeBus(sessionId);
+        void emitSSE(sessionId, 'error', { message: 'Session timed out.' }).then(() => closeBus(sessionId));
     }, 5 * 60 * 1000);
 
     Promise.resolve(runWithCloudstickContext(user, () => runAgentLoop(msg, onReply, onApproval)))
-        .then(() => { clearTimeout(sessionTimeout); emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
-        .catch((err: Error) => {
+        .then(async () => { clearTimeout(sessionTimeout); await emitSSE(sessionId, 'done', { text: '' }); await closeBus(sessionId); })
+        .catch(async (err: Error) => {
             clearTimeout(sessionTimeout);
             logger.error('gateway_agent_loop_failed', err, { module: 'gateway', event: 'agent_loop_failed', requestId, sessionId, accountId });
-            emitSSE(sessionId, 'error', { message: 'An error occurred processing your request.' });
-            closeBus(sessionId);
+            await emitSSE(sessionId, 'error', { message: 'An error occurred processing your request.' });
+            await closeBus(sessionId);
         })
-        .finally(() => { releaseSession(accountId); releaseSessionSlot(sessionId); });
+        .finally(async () => { await releaseSession(accountId); releaseSessionSlot(sessionId); });
 
     logger.info('gateway_chat_accepted', { module: 'gateway', event: 'chat_accepted', requestId, sessionId, accountId, plan });
 
@@ -300,7 +326,7 @@ function writeSSEEvent(res: http.ServerResponse, entry: ReplayEvent): void {
     res.write(`id: ${entry.id}\nevent: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`);
 }
 
-function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): void {
+async function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -310,11 +336,47 @@ function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessi
     });
     res.write(':ok\n\n');
 
-    // ── Phase 3: replay missed events on reconnect ─────────────────────────────
     const lastEventId = req.headers['last-event-id'] as string | undefined;
+
+    if (isRedisConfigured()) {
+        // ── Redis pub/sub (cluster-safe) ──────────────────────────────────────
+        const buffered = await getRedisPublisher().lrange(`${REDIS_REPLAY}${sessionId}`, 0, -1);
+        const events = buffered.map((s: string) => JSON.parse(s) as ReplayEvent);
+
+        // Replay missed events on reconnect
+        if (lastEventId) {
+            const idx = events.findIndex((e: ReplayEvent) => e.id === lastEventId);
+            const missed = idx === -1 ? events : events.slice(idx + 1);
+            for (const entry of missed) {
+                writeSSEEvent(res, entry);
+                if (entry.event === 'done' || entry.event === 'error') {
+                    res.end();
+                    return;
+                }
+            }
+        }
+
+        const sub = createRedisSubscriber();
+        await sub.subscribe(`${REDIS_CH}${sessionId}`);
+
+        sub.on('message', (_ch: string, message: string) => {
+            let entry: ReplayEvent;
+            try { entry = JSON.parse(message) as ReplayEvent; }
+            catch { return; }
+            writeSSEEvent(res, entry);
+            if (entry.event === 'done' || entry.event === 'error') {
+                res.end();
+                sub.disconnect();
+            }
+        });
+
+        req.on('close', () => { sub.disconnect(); });
+        return;
+    }
+
+    // ── In-memory fallback ────────────────────────────────────────────────────
     if (lastEventId) {
         const buffered = replayBuffer.get(sessionId) ?? [];
-        // Find the index after the last event the client received
         const idx = buffered.findIndex(e => e.id === lastEventId);
         const missed = idx === -1 ? buffered : buffered.slice(idx + 1);
         for (const entry of missed) {
@@ -325,16 +387,13 @@ function handleStream(req: http.IncomingMessage, res: http.ServerResponse, sessi
             }
         }
     }
-    // ──────────────────────────────────────────────────────────────────────────
 
     const bus = getBus(sessionId);
-
     const onEvent = (entry: ReplayEvent) => {
         writeSSEEvent(res, entry);
         if (entry.event === 'done' || entry.event === 'error') res.end();
     };
     const onClose = () => res.end();
-
     bus.on('sse', onEvent);
     bus.once('close', onClose);
     req.on('close', () => { bus.off('sse', onEvent); bus.off('close', onClose); });
@@ -369,15 +428,15 @@ async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse
     }
     const { approvalId, decision, reason } = parsed;
 
-    const onReply: ReplyFn = async (text) => emitSSE(sessionId, 'chunk', { text });
-    const onApproval: ApprovalFn = async ({ approvalId: id, command, targetHost, rationale }) =>
-        emitSSE(sessionId, 'approval_required', { approvalId: id, action: command, host: targetHost, rationale });
+    const onReply: ReplyFn = async (text) => { await emitSSE(sessionId, 'chunk', { text }); };
+    const onApproval: ApprovalFn = async ({ approvalId: id, command, targetHost, rationale }) => {
+        await emitSSE(sessionId, 'approval_required', { approvalId: id, action: command, host: targetHost, rationale });
+    };
 
     const cloudstickUser = await getUserByCloudstickAccountId(accountId);
     const approvalTimeout = setTimeout(() => {
         logger.warn('gateway_approval_resume_timeout', { module: 'gateway', event: 'approval_resume_timeout', requestId, sessionId, accountId, approvalId });
-        emitSSE(sessionId, 'error', { message: 'Approval processing timed out.' });
-        closeBus(sessionId);
+        void emitSSE(sessionId, 'error', { message: 'Approval processing timed out.' }).then(() => closeBus(sessionId));
     }, 5 * 60 * 1000);
 
     Promise.resolve(runWithCloudstickContext(cloudstickUser, () => resumeApprovedSession(
@@ -388,12 +447,12 @@ async function handleApprove(req: http.IncomingMessage, res: http.ServerResponse
         onApproval,
         typeof reason === 'string' ? reason : undefined,
     )))
-        .then(() => { clearTimeout(approvalTimeout); emitSSE(sessionId, 'done', { text: '' }); closeBus(sessionId); })
-        .catch((err: Error) => {
+        .then(async () => { clearTimeout(approvalTimeout); await emitSSE(sessionId, 'done', { text: '' }); await closeBus(sessionId); })
+        .catch(async (err: Error) => {
             clearTimeout(approvalTimeout);
             logger.error('gateway_approval_resume_failed', err, { module: 'gateway', event: 'approval_resume_failed', requestId, sessionId, accountId, approvalId });
-            emitSSE(sessionId, 'error', { message: 'An error occurred processing the approval.' });
-            closeBus(sessionId);
+            await emitSSE(sessionId, 'error', { message: 'An error occurred processing the approval.' });
+            await closeBus(sessionId);
         });
 
     logger.info('gateway_approval_accepted', { module: 'gateway', event: 'approval_accepted', requestId, sessionId, accountId, approvalId, decision });

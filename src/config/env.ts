@@ -71,7 +71,16 @@ const EnvSchema = z.object({
     // Cloudstick gateway shared secret — 64-char hex.
     // Used as the HMAC-SHA256 signing key for server-to-server gateway requests.
     CLOUDSTICK_GATEWAY_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().regex(/^[0-9a-f]{64}$/).optional()),
+
+    // EC public key (PEM) from Cloudstick for verifying JWT signatures during /setup.
+    // When unset, signature verification is skipped with a warning.
+    // Generate: openssl ec -in cloudstick-ca.key -pubout > cloudstick-ca.pub
+    CLOUDSTICK_JWT_PUBLIC_KEY: z.preprocess((val) => val === '' ? undefined : val, z.string().optional()),
     CLOUDSTICK_GATEWAY_SIGNATURE_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
+
+    // Redis — required for PM2 cluster mode / multi-instance SSE bus (Phase 3)
+    // Omit or leave empty to use in-memory fallback (single-instance only)
+    REDIS_URL: z.preprocess((val) => val === '' ? undefined : val, z.string().optional()),
 
     // CORS: allowed origin for the HTTP gateway (e.g. https://app.cloudstick.io)
     // Set to '*' during development. Omit or leave empty to deny all cross-origin requests.

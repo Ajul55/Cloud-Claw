@@ -17,6 +17,7 @@ import type { Tool, ToolResult } from './types.js';
 interface DiscoveryResult {
     domain: string;
     vhost_path: string | null;
+    web_root: string | null;
     php_pool: string | null;
     db_name: string | null;
     mysql_host: string | null;
@@ -34,6 +35,7 @@ async function discoverStack(
     const result: DiscoveryResult = {
         domain,
         vhost_path: null,
+        web_root: null,
         php_pool: null,
         db_name: null,
         mysql_host: null,
@@ -60,7 +62,21 @@ async function discoverStack(
     if (vhostResult.status === 'fulfilled' && vhostResult.value) {
         result.vhost_path = vhostResult.value;
 
-        // 3. Find PHP-FPM socket/pool referenced in vhost
+        // 3a. Extract document root from vhost config
+        try {
+            const webRoot = await sshExec(
+                host,
+                `grep -m1 '^\\s*root\\s' "${result.vhost_path}" 2>/dev/null | awk '{print $2}' | tr -d ';'`
+            );
+            if (webRoot.trim()) {
+                result.web_root = webRoot.trim();
+                result.extra_meta['web_root'] = webRoot.trim();
+            }
+        } catch (_) {
+            result.extra_meta['web_root_error'] = 'Could not extract document root from vhost config';
+        }
+
+        // 3c. Find PHP-FPM socket/pool referenced in vhost
         try {
             const phpFpmLine = await sshExec(
                 host,
@@ -123,8 +139,9 @@ export const discoveryAgentTool: Tool = {
     name: 'discovery_agent',
     description:
         'SSH into a target server and map the WordPress hosting stack for a given domain. ' +
-        'Discovers: Nginx config, PHP-FPM pool, MySQL database name, and PHP version. ' +
+        'Discovers: Nginx config path, document root directory (web_root — the `root` directive from the nginx vhost config), PHP-FPM pool, MySQL database name, and PHP version. ' +
         'Persists the topology as a Causality Map record in the database. ' +
+        'ALWAYS call this tool before reading or modifying files for a domain — the web_root field gives you the exact document root path, preventing path hallucinations. ' +
         'CRITICAL: If the user does not provide the host IP, domain, or client_id in their prompt, you MUST NOT guess or invent them. You must ask the user for the missing values instead of calling this tool.',
     parameters: {
         type: 'object',
@@ -180,6 +197,7 @@ export const discoveryAgentTool: Tool = {
                 `📊 Causality Map (ID: ${record.id}):`,
                 `  • Nginx:      ${discovered.nginx_version ?? 'unknown'}`,
                 `  • Vhost:      ${discovered.vhost_path ?? 'not found'}`,
+                `  • Web Root:   ${discovered.web_root ?? 'not found'}`,
                 `  • PHP:        ${discovered.php_version ?? 'unknown'}`,
                 `  • PHP-FPM:    ${discovered.php_pool ?? 'not found'}`,
                 `  • DB Name:    ${discovered.db_name ?? 'not found'}`,

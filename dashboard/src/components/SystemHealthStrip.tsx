@@ -7,7 +7,6 @@ interface SystemHealthStripProps {
   uptimeSeconds: number;
   llmConsecutiveErrors: number;
   theme: Theme;
-  cardRadius?: number;
 }
 
 function formatUptime(seconds: number): string {
@@ -23,92 +22,73 @@ interface HealthMetric {
   sub: string;
   alert: boolean;
   accentColor: string;
-  pulseAnim: string;
+  icon: React.ReactNode;
+}
+
+function IconCircle({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+      background: `${color}0F`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      transition: 'all 0.2s ease',
+    }}>
+      {children}
+    </div>
+  );
 }
 
 function HealthCard({ metric, idx }: { metric: HealthMetric; idx: number }) {
   const [hovered, setHovered] = useState(false);
-
-  const borderGrad = metric.alert
-    ? hovered
-      ? 'linear-gradient(135deg, #ef444465, #dc262645)'
-      : 'linear-gradient(135deg, #ef444440, #dc262625)'
-    : hovered
-      ? `linear-gradient(135deg, ${metric.accentColor}55, ${metric.accentColor}25)`
-      : `linear-gradient(135deg, ${metric.accentColor}35, ${metric.accentColor}14)`;
 
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: metric.alert
-          ? `linear-gradient(${hovered ? '#fffafa' : '#fffcfc'}, #fff5f5) padding-box, ${borderGrad} border-box`
-          : `linear-gradient(#fff, #fff) padding-box, ${borderGrad} border-box`,
-        border: '1.5px solid transparent',
-        borderRadius: 20,
-        boxShadow: metric.alert
-          ? hovered
-            ? '0 1px 0 rgba(255,255,255,1) inset, 0 6px 20px rgba(239,68,68,0.12), 0 16px 40px rgba(239,68,68,0.08)'
-            : '0 1px 0 rgba(255,255,255,0.85) inset, 0 2px 8px rgba(239,68,68,0.06), 0 4px 20px rgba(239,68,68,0.05)'
-          : hovered
-            ? '0 1px 0 rgba(255,255,255,1) inset, 0 6px 20px rgba(0,0,0,0.09), 0 16px 40px rgba(0,0,0,0.08)'
-            : '0 1px 0 rgba(255,255,255,0.85) inset, 0 2px 8px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.04)',
-        padding: '20px 22px 16px',
-        transform: hovered ? 'translateY(-4px)' : 'none',
-        transition: 'transform 0.22s cubic-bezier(0.25,0.46,0.45,0.94), box-shadow 0.22s ease, background 0.22s ease',
+        background: '#fff',
+        border: `1.5px solid ${metric.alert ? '#fecaca33' : '#e5e7eb44'}`,
+        borderRadius: 24,
+        boxShadow: hovered ? 'var(--shadow-card-hover)' : 'var(--shadow-card)',
+        padding: '20px 24px 18px',
+        transform: hovered ? 'translateY(-2px)' : 'none',
+        transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
         animation: `fadeUp 0.4s ease ${idx * 0.08}s both`,
       }}
     >
-      {/* Label row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div style={{
-          fontSize: 10, fontWeight: 700, color: '#9CA3AF',
+          fontSize: 10.5, fontWeight: 700, color: '#9CA3AF',
           textTransform: 'uppercase', letterSpacing: '0.1em',
+          marginTop: 4,
         }}>
           {metric.label}
         </div>
-        <div style={{
-          width: 7, height: 7, borderRadius: '50%',
-          background: metric.alert ? '#ef4444' : metric.accentColor,
-          animation: metric.pulseAnim,
-          flexShrink: 0,
-          transition: 'transform 0.2s ease, box-shadow 0.2s ease',
-          ...(hovered ? {
-            transform: 'scale(1.25)',
-            boxShadow: `0 0 0 4px ${metric.alert ? '#ef444425' : metric.accentColor + '25'}`,
-          } : {}),
-        }} />
+        <IconCircle color={metric.alert ? '#ef4444' : metric.accentColor}>
+          {metric.icon}
+        </IconCircle>
       </div>
 
-      {/* Value */}
       <div style={{
-        fontSize: 28, fontWeight: 900,
-        color: metric.alert ? '#dc2626' : '#0F0F1A',
-        letterSpacing: '-1px', lineHeight: 1,
+        fontSize: 28, fontWeight: 800,
+        color: metric.alert ? '#dc2626' : '#1A1D23',
+        letterSpacing: '-0.02em', lineHeight: 1,
         marginBottom: 14,
-        transition: 'color 0.2s ease',
       }}>
         {metric.value}
       </div>
 
-      {/* Status pill */}
       <div style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
+        display: 'inline-flex', alignItems: 'center', gap: 6,
         padding: '4px 10px', borderRadius: 20,
-        background: metric.alert ? 'rgba(239,68,68,0.08)' : 'rgba(0,0,0,0.04)',
-        transition: 'background 0.2s ease',
+        background: metric.alert ? '#ef44440D' : '#f3f4f6',
       }}>
         <div style={{
           width: 5, height: 5, borderRadius: '50%',
           background: metric.alert ? '#ef4444' : metric.accentColor,
-          flexShrink: 0,
+          animation: metric.alert ? 'livePulseRed 2s ease infinite' : 'none',
         }} />
-        <span style={{
-          fontSize: 10.5,
-          color: metric.alert ? '#dc2626' : '#6B7280',
-          fontWeight: metric.alert ? 600 : 500,
-        }}>
+        <span style={{ fontSize: 10.5, color: metric.alert ? '#dc2626' : '#6B7280', fontWeight: 500 }}>
           {metric.sub}
         </span>
       </div>
@@ -125,36 +105,69 @@ export function SystemHealthStrip({
 }: SystemHealthStripProps) {
   const metrics: HealthMetric[] = [
     {
-      label: 'Active Sessions',
+      label: 'Sessions',
       value: String(activeSessions),
-      sub: activeSessions > 20 ? 'High load detected' : 'Load normal',
+      sub: activeSessions > 20 ? 'High load' : 'Normal',
       alert: activeSessions > 20,
-      accentColor: '#06B6D4',
-      pulseAnim: activeSessions > 20 ? 'livePulseRed 2s ease infinite' : 'livePulse 2s ease infinite',
+      accentColor: '#1e8ba6',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      ),
     },
     {
       label: 'Memory',
       value: `${memoryMb} MB`,
-      sub: memoryMb > 800 ? 'Near restart threshold' : 'Within limits',
+      sub: memoryMb > 800 ? 'Warning' : 'Healthy',
       alert: memoryMb > 800,
-      accentColor: '#8B5CF6',
-      pulseAnim: memoryMb > 800 ? 'livePulseRed 2s ease infinite' : 'livePulse 2s ease infinite',
+      accentColor: '#7e4ce6',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="2" width="20" height="20" rx="2" ry="2" />
+          <rect x="6" y="6" width="12" height="12" />
+          <line x1="6" y1="1" x2="6" y2="2" />
+          <line x1="18" y1="1" x2="18" y2="2" />
+          <line x1="6" y1="22" x2="6" y2="23" />
+          <line x1="18" y1="22" x2="18" y2="23" />
+          <line x1="23" y1="6" x2="22" y2="6" />
+          <line x1="23" y1="18" x2="22" y2="18" />
+          <line x1="1" y1="6" x2="2" y2="6" />
+          <line x1="1" y1="18" x2="2" y2="18" />
+        </svg>
+      ),
     },
     {
       label: 'Uptime',
       value: formatUptime(uptimeSeconds),
-      sub: uptimeSeconds < 600 ? 'Recent restart' : 'Running stable',
+      sub: uptimeSeconds < 600 ? 'Recovering' : 'Stable',
       alert: uptimeSeconds < 600,
-      accentColor: '#10B981',
-      pulseAnim: uptimeSeconds < 600 ? 'livePulseRed 2s ease infinite' : 'livePulse 2s ease infinite',
+      accentColor: '#1e8f6e',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </svg>
+      ),
     },
     {
       label: 'LLM Errors',
       value: String(llmConsecutiveErrors),
-      sub: llmConsecutiveErrors > 0 ? 'Consecutive failures' : 'No errors',
+      sub: llmConsecutiveErrors > 0 ? 'Fault detected' : 'Healthy',
       alert: llmConsecutiveErrors > 0,
-      accentColor: '#10B981',
-      pulseAnim: llmConsecutiveErrors > 0 ? 'livePulseRed 2s ease infinite' : 'livePulse 2s ease infinite',
+      accentColor: '#1e8f6e',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+        </svg>
+      ),
     },
   ];
 
@@ -162,7 +175,7 @@ export function SystemHealthStrip({
     <div style={{
       display: 'grid',
       gridTemplateColumns: 'repeat(4, 1fr)',
-      gap: 12,
+      gap: 16,
       marginBottom: 16,
     }}>
       {metrics.map((metric, idx) => (

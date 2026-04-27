@@ -18,12 +18,13 @@ import { startSentinel } from './sentinel/scheduler.js';
 import { startHealthServer, startDashboardServer, registerReadinessCheck } from './health.js';
 import { startAlertScheduler } from './telemetry/ops_alerts.js';
 import { createGatewayHandler } from './interfaces/http_gateway.js';
+import { logger } from './telemetry/logger.js';
 
 // ─── FIX: Global crash handlers ─────────────────────────────────────────────
 // Without these, unhandled rejections and uncaught exceptions kill PM2 workers
 // silently with no diagnostic output — making production outages undebuggable.
 process.on('uncaughtException', (err) => {
-    console.error('[FATAL] uncaughtException — process will exit:', err);
+    logger.error('[FATAL] uncaughtException — process will exit', err);
     // Flush logs then exit non-zero so PM2 restarts the worker
     setTimeout(() => process.exit(1), 500);
 });
@@ -35,7 +36,7 @@ const REJECTION_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 process.on('unhandledRejection', (reason) => {
     _unhandledRejectionCount++;
-    console.error(`[FATAL] unhandledRejection #${_unhandledRejectionCount}:`, reason);
+    logger.error(`[FATAL] unhandledRejection #${_unhandledRejectionCount}`, reason);
 
     const now = Date.now();
     if (
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
         await connectDB();
         _dbReady = true;
     } else {
-        console.log('[DB] No DATABASE_URL configured — running without persistence');
+        logger.info('[DB] No DATABASE_URL configured — running without persistence');
     }
 
     // 1b. Health check endpoint + Cloudstick HTTP gateway
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
         await startTelegramBot(telegramBot);
         _telegramReady = true;
     } else {
-        console.log('[Telegram] No TELEGRAM_BOT_TOKEN configured — skipping');
+        logger.info('[Telegram] No TELEGRAM_BOT_TOKEN configured — skipping');
     }
 
     // 3. Slack (primary)
@@ -101,12 +102,12 @@ async function main(): Promise<void> {
         const slackAppCandidate = createSlackApp();
         slackApp = await startSlackApp(slackAppCandidate);
         if (!slackApp) {
-            console.warn('[Slack] Disabled — startup failed. Running without Slack.');
+            logger.warn('[Slack] Disabled — startup failed. Running without Slack.');
         } else {
             _slackReady = true;
         }
     } else {
-        console.log('[Slack] Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN — skipping');
+        logger.info('[Slack] Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN — skipping');
     }
 
     console.log('');
@@ -117,14 +118,14 @@ async function main(): Promise<void> {
     startAlertScheduler();
 
     cron.schedule('*/5 * * * *', () => {
-        expireStaleApprovals().catch(err => console.warn('[cron] expireStaleApprovals failed:', err));
+        expireStaleApprovals().catch(err => logger.error('[cron] expireStaleApprovals failed', err));
     });
     cron.schedule('*/10 * * * *', () => {
-        timeoutStaleSessions().catch(err => console.warn('[cron] timeoutStaleSessions failed:', err));
+        timeoutStaleSessions().catch(err => logger.error('[cron] timeoutStaleSessions failed', err));
     });
     // W7: Daily fix_memory TTL cleanup at 3 AM
     cron.schedule('0 3 * * *', () => {
-        cleanupOldFixes(90).catch(err => console.warn('[cron] cleanupOldFixes failed:', err));
+        cleanupOldFixes(90).catch(err => logger.error('[cron] cleanupOldFixes failed', err));
     });
 
     // 4. Sentinel Heartbeat
@@ -136,7 +137,7 @@ async function main(): Promise<void> {
             try {
                 await telegramBot.api.sendMessage(env.PILOT_CHAT_ID, text, { parse_mode: 'Markdown' });
             } catch (err) {
-                console.error('[Sentinel] Failed to notify via Telegram:', err);
+                logger.error('[Sentinel] Failed to notify via Telegram', err);
             }
         } else if (slackApp) {
             // Slack channels are alphanumeric (e.g., C1234ABC)
@@ -146,14 +147,14 @@ async function main(): Promise<void> {
                     text
                 });
             } catch (err) {
-                console.error('[Sentinel] Failed to notify via Slack:', err);
+                logger.error('[Sentinel] Failed to notify via Slack', err);
             }
         }
     });
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
-        console.log(`\n[Main] Caught ${signal} — shutting down...`);
+        logger.info(`[Main] Caught ${signal} — shutting down...`);
         if (telegramBot) telegramBot.stop();
         if (slackApp) await slackApp.stop();
         if (env.DATABASE_URL) {
@@ -162,7 +163,9 @@ async function main(): Promise<void> {
             const { closeDashboardPool } = await import('./dashboard/pool.js');
             await closeDashboardPool();
         }
-        console.log('[Main] Goodbye 👋');
+        const { drainSSHPool } = await import('./utils/ssh.js');
+        drainSSHPool();
+        logger.info('[Main] Goodbye');
         process.exit(0);
     };
 
@@ -171,6 +174,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-    console.error('[Main] Fatal startup error:', err);
+    logger.error('[Main] Fatal startup error', err);
     process.exit(1);
 });

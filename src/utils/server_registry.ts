@@ -199,8 +199,28 @@ export function formatServerTarget(server: Pick<ServerNode, 'label' | 'ip'>): st
     return `${server.label} (${server.ip})`;
 }
 
+// Only allow printable ASCII that cannot inject log lines, shell commands, or HTML.
+// Permits: alphanumeric, spaces, hyphens, dots, underscores, parentheses, and slashes
+// (slashes are common in Docker/K8s names and path-style labels).
+const SERVER_LABEL_RE = /^[\w][\w\s.\-/()\u0020-\u007E]{0,62}[\w)]?$/;
+
+/**
+ * Validate a server_label coming from LLM args before using it in logs or approval messages.
+ * Throws if the label contains control characters or shell-special sequences.
+ */
+function validateServerLabel(label: string): string {
+    if (label.length === 0) return label;
+    if (!SERVER_LABEL_RE.test(label) || /[\x00-\x1F\x7F]/.test(label)) {
+        throw new Error(
+            `Invalid server_label "${label.slice(0, 40)}" — must be alphanumeric with spaces, hyphens, dots, or underscores`
+        );
+    }
+    return label;
+}
+
 export async function resolveServerArg(args: Record<string, unknown>): Promise<ServerNode> {
-    const serverLabel = String(args.server_label ?? '').trim();
+    const rawServerLabel = String(args.server_label ?? '').trim();
+    const serverLabel = rawServerLabel ? validateServerLabel(rawServerLabel) : rawServerLabel;
     const host = String(args.host ?? '').trim();
     const serverId = String(args.server_id ?? '').trim();
 

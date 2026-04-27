@@ -1,9 +1,11 @@
-# Dependencies
+# Dependencies (rebuilt inside container)
 node_modules
+dashboard/node_modules
 npm-debug.log*
 
 # Build output (rebuilt inside container)
 dist
+dashboard/dist
 
 # Development files
 .git

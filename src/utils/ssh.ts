@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { getUserByPlatformId, getDecryptedSshKey } from '../services/user_service.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { isSSHCAConfigured, getSignedCert, readCertificate } from '../security/ssh_ca.js';
+import { logger } from '../telemetry/logger.js';
 
 let cachedKey: Buffer | null = null;
 try {
@@ -11,7 +12,7 @@ try {
         cachedKey = readFileSync(env.SSH_PRIVATE_KEY_PATH);
     }
 } catch (err) {
-    console.error(`[ssh] Failed to read cached private key at ${env.SSH_PRIVATE_KEY_PATH}`, err);
+    logger.error(`[ssh] Failed to read cached private key at ${env.SSH_PRIVATE_KEY_PATH}`, err);
     cachedKey = null;
 }
 
@@ -98,7 +99,7 @@ async function getPooledConnection(
         if (!pooled.inUse) {
             pooled.inUse = true;
             pooled.lastUsed = Date.now();
-            console.log(`[ssh] Reusing pooled connection for ${hostKey}`);
+            logger.debug(`[ssh] Reusing pooled connection for ${hostKey}`);
             return pooled.conn;
         }
     }
@@ -112,7 +113,7 @@ async function getPooledConnection(
         if (free) {
             free.inUse = true;
             free.lastUsed = Date.now();
-            console.log(`[ssh] Reusing freed connection for ${hostKey}`);
+            logger.debug(`[ssh] Reusing freed connection for ${hostKey}`);
             return free.conn;
         }
 
@@ -134,7 +135,7 @@ async function getPooledConnection(
         cleanupPool(hostKey);
     }
 
-    console.log(`[ssh] Creating new SSH connection for ${hostKey}`);
+    logger.info(`[ssh] Creating new SSH connection for ${hostKey}`);
     const conn = await connectSSH(host, port, user, key, certificate);
     const pooled: PooledConnection = { conn, inUse: true, lastUsed: Date.now() };
     pool.push(pooled);
@@ -159,9 +160,9 @@ function connectSSH(
         conn.on('ready', () => {
             clearTimeout(timer);
             if (certificate) {
-                console.log(`[ssh] Connected to ${host}:${port} using SSH certificate`);
+                logger.info(`[ssh] Connected to ${host}:${port} using SSH certificate`);
             }
-            const hostKey = `${host}:${port}`;
+            const hostKey = poolKey(host, port, user);
             // Self-evict on keepalive failure or unexpected close
             conn.on('end', () => evictConnection(conn, hostKey));
             conn.on('error', () => evictConnection(conn, hostKey));
@@ -197,8 +198,25 @@ function evictConnection(conn: SSHClient, hostKey: string): void {
     const idx = pool.findIndex(p => p.conn === conn);
     if (idx !== -1) {
         pool.splice(idx, 1);
-        console.log(`[ssh] Evicted dead connection for ${hostKey} (${pool.length} remaining)`);
+        logger.warn(`[ssh] Evicted dead connection for ${hostKey} (${pool.length} remaining)`);
     }
+}
+
+/**
+ * Drain all SSH connections in the pool (call on SIGTERM/SIGINT).
+ */
+export function drainSSHPool(): void {
+    for (const [hostKey, pool] of connectionPool.entries()) {
+        for (const pooled of pool) {
+            closePooledConn(pooled);
+        }
+        connectionPool.delete(hostKey);
+    }
+    // Wake all waiters so they reject cleanly
+    for (const [, queue] of _waitQueue.entries()) {
+        for (const wakeup of queue) wakeup();
+    }
+    _waitQueue.clear();
 }
 
 // Periodic pool cleanup — run every 30 seconds
@@ -272,10 +290,10 @@ async function executeSSHCommand(
                 const decrypted = getDecryptedSshKey(ctx);
                 if (decrypted) {
                     key = Buffer.from(decrypted);
-                    console.log(`[ssh] Using per-user SSH key for ${host}`);
+                    logger.debug(`[ssh] Using per-user SSH key for ${host}`);
                 }
             } catch (err) {
-                console.warn(`[ssh] Failed to decrypt per-user SSH key, falling back to .env key`, err);
+                logger.warn(`[ssh] Failed to decrypt per-user SSH key, falling back to .env key`, { error: String(err) });
             }
         }
     }
@@ -301,11 +319,11 @@ async function executeSSHCommand(
             if (certPath) {
                 certificate = readCertificate(certPath);
                 if (certificate) {
-                    console.log(`[ssh] Using SSH CA certificate for ${host}`);
+                    logger.info(`[ssh] Using SSH CA certificate for ${host}`);
                 }
             }
         } catch (err) {
-            console.warn(`[ssh] SSH CA cert generation failed, falling back to key auth:`, err);
+            logger.warn(`[ssh] SSH CA cert generation failed, falling back to key auth`, { error: String(err) });
         }
     }
 
@@ -376,7 +394,7 @@ export async function sshExec(
                 privateKey: options.privateKey,
             });
             if (attempt > 1) {
-                console.log(`[ssh] Connected on attempt ${attempt}/${retries} for ${host}`);
+                logger.info(`[ssh] Connected on attempt ${attempt}/${retries} for ${host}`);
             }
             return result;
         } catch (err: any) {
@@ -384,14 +402,14 @@ export async function sshExec(
             const isLast = attempt === retries;
             const retryable = isRetryable(error);
 
-            console.warn(`[ssh] Attempt ${attempt}/${retries} failed for ${host}: ${error.message}`);
+            logger.warn(`[ssh] Attempt ${attempt}/${retries} failed for ${host}: ${error.message}`);
 
             if (isLast || !retryable) {
                 throw new Error(`SSH failed on ${host} after ${attempt} attempt(s): ${error.message}`);
             }
 
             const delay = BASE_RETRY_DELAY_MS * attempt;
-            console.log(`[ssh] Retrying in ${delay}ms...`);
+            logger.info(`[ssh] Retrying in ${delay}ms...`);
             await sleep(delay);
         }
     }

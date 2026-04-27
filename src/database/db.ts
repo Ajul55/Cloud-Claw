@@ -286,14 +286,15 @@ export async function upsertSession(
     // CRIT-8: Cap messages JSONB at 50KB to prevent unbounded growth
     const MAX_MESSAGES_BYTES = 50_000;
     let messagesToStore = session.messages;
-    if (JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+    let messagesJson = JSON.stringify(messagesToStore);
+    if (messagesJson.length > MAX_MESSAGES_BYTES) {
         // Trim from the front (oldest messages) until we're under the cap
-        while (messagesToStore.length > 5 && JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+        while (messagesToStore.length > 5 && messagesJson.length > MAX_MESSAGES_BYTES) {
             messagesToStore = messagesToStore.slice(1);
+            messagesJson = JSON.stringify(messagesToStore);
         }
         console.warn(`[DB] Session ${session.id} messages trimmed to ${messagesToStore.length} msgs (>50KB)`);
     }
-    const messagesJson = JSON.stringify(messagesToStore);
 
     const pool = getPool();
 
@@ -465,12 +466,13 @@ export async function resolveApprovalAndSaveSession(
     // CRIT-8 cap
     const MAX_MESSAGES_BYTES = 50_000;
     let messagesToStore = session.messages;
-    if (JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
-        while (messagesToStore.length > 5 && JSON.stringify(messagesToStore).length > MAX_MESSAGES_BYTES) {
+    let messagesJson = JSON.stringify(messagesToStore);
+    if (messagesJson.length > MAX_MESSAGES_BYTES) {
+        while (messagesToStore.length > 5 && messagesJson.length > MAX_MESSAGES_BYTES) {
             messagesToStore = messagesToStore.slice(1);
+            messagesJson = JSON.stringify(messagesToStore);
         }
     }
-    const messagesJson = JSON.stringify(messagesToStore);
 
     const pool = getPool();
     const client = await pool.connect();

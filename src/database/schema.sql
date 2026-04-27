@@ -144,7 +144,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS users_platform_idx ON users (platform);
 CREATE INDEX IF NOT EXISTS users_platform_id_idx ON users (platform_id);
-
 -- ─── Dynamic Tool Registry ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tools (
   id          TEXT        PRIMARY KEY,
@@ -153,7 +152,7 @@ CREATE TABLE IF NOT EXISTS tools (
   schema      JSONB,
   tier        INTEGER     DEFAULT 1,
   enabled     BOOLEAN     DEFAULT true,
-  tenant_id   UUID        REFERENCES accounts(id) ON DELETE CASCADE
+  tenant_id   UUID        -- References accounts(id) if accounts table exists, otherwise keep as UUID/TEXT for now
 );
 CREATE INDEX IF NOT EXISTS idx_tools_tenant ON tools (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools (enabled);

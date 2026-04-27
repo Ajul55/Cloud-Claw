@@ -9,7 +9,7 @@ html, body {
   width: 100%;
   overflow: hidden;
   font-family: 'Geist', -apple-system, sans-serif;
-  background: #F2F3F8;
+  background: #F8FAFC;
   color: #0F0F1A;
 }
 
@@ -20,51 +20,52 @@ html, body {
 
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #E0E0EA; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #C8C8D8; }
+::-webkit-scrollbar-thumb { background: #E4E7EF; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #CDD1DC; }
 
 /* ─── Design tokens ─────────────────────────────────────────────────── */
 :root {
-  --color-bg:           #F2F3F8;
+  --color-bg:           #F8FAFC;
   --color-surface:      #FFFFFF;
-  --color-border:       #EAEBF2;
-  --color-text:         #0F0F1A;
+  --color-border:       #EDF0F5;
+  --color-text:         #1A1D23;
   --color-muted:        #9CA3AF;
 
-  --gradient-primary:   linear-gradient(135deg, #EC4899, #F97316);
-  --gradient-secondary: linear-gradient(135deg, #7C3AED, #06B6D4);
+  --gradient-primary:   linear-gradient(135deg, #CF8BA6, #D9956B);
+  --gradient-secondary: linear-gradient(135deg, #7A66C2, #4AA0A8);
 
-  --radius-card:        20px;
+  --radius-card:        24px;
   --space-sm:           8px;
   --space-md:           16px;
   --space-lg:           24px;
 
-  /* Card shadow layers */
+  /* Card shadow — extremely soft, production-ready */
   --shadow-card:
-    0 1px 0 rgba(255,255,255,0.85) inset,
-    0 1px 4px rgba(0,0,0,0.04),
-    0 4px 16px rgba(0,0,0,0.05);
+    0 1px 0 rgba(255,255,255,1) inset,
+    0 2px 4px rgba(0,0,0,0.02),
+    0 10px 30px rgba(0,0,0,0.04);
   --shadow-card-hover:
     0 1px 0 rgba(255,255,255,1) inset,
-    0 6px 16px rgba(0,0,0,0.08),
-    0 16px 40px rgba(0,0,0,0.10);
+    0 4px 12px rgba(0,0,0,0.05),
+    0 20px 48px rgba(0,0,0,0.07);
 
   /* Timing */
-  --t-fast:   150ms;
-  --t-normal: 220ms;
-  --t-slow:   350ms;
+  --t-fast:   180ms;
+  --t-normal: 280ms;
+  --t-slow:   450ms;
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
-/* ─── Premium card (hover lift) ─────────────────────────────────────── */
+/* ─── Premium card (hover lift — softer) ────────────────────────────── */
 .premium-card {
   transition:
-    transform var(--t-normal) var(--ease-out),
-    box-shadow var(--t-normal) var(--ease-out);
+    transform var(--t-normal) var(--ease-std),
+    box-shadow var(--t-normal) var(--ease-std);
   will-change: transform, box-shadow;
 }
 .premium-card:hover {
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   box-shadow: var(--shadow-card-hover) !important;
 }
 
@@ -75,7 +76,7 @@ html, body {
     color var(--t-fast) ease;
 }
 .nav-btn:hover:not(.nav-btn--active) {
-  background: rgba(15, 15, 26, 0.04) !important;
+  background: rgba(15, 15, 26, 0.035) !important;
   color: #374151 !important;
 }
 .nav-btn--active {
@@ -99,7 +100,7 @@ html, body {
   overflow: hidden;
 }
 .btn-press:active {
-  transform: scale(0.96);
+  transform: scale(0.97);
 }
 
 /* ─── Ripple ─────────────────────────────────────────────────────────── */
@@ -108,7 +109,7 @@ html, body {
   border-radius: 50%;
   pointer-events: none;
   transform: scale(0);
-  background: rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.3);
   animation: rippleExpand 0.55s var(--ease-out) forwards;
 }
 @keyframes rippleExpand {
@@ -120,7 +121,7 @@ html, body {
   transition: background var(--t-fast) ease;
 }
 .session-row:hover {
-  background: rgba(236, 72, 153, 0.03) !important;
+  background: rgba(236, 72, 153, 0.024) !important;
 }
 .session-row:hover td {
   color: #0F0F1A;
@@ -170,6 +171,16 @@ html, body {
   animation: tooltipIn 0.18s var(--ease-out) forwards;
 }
 
+/* ─── Donut chart ────────────────────────────────────────────────────── */
+@keyframes donutFill {
+  from { stroke-dashoffset: var(--donut-circumference, 276); }
+  to   { stroke-dashoffset: var(--donut-offset, 0); }
+}
+@keyframes centerFadeIn {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
 /* ─── Animations ─────────────────────────────────────────────────────── */
 @keyframes growUp {
   from { transform: scaleY(0); }
@@ -189,13 +200,13 @@ html, body {
   100% { opacity: 0.5; }
 }
 @keyframes livePulse {
-  0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
-  60%  { box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+  60%  { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
   100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
 }
 @keyframes livePulseRed {
-  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
-  60%  { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+  60%  { box-shadow: 0 0 0 4px rgba(239,68,68,0); }
   100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
 }
 @keyframes accentPulse {
@@ -204,7 +215,7 @@ html, body {
 }
 @keyframes activeBtnGlow {
   0%, 100% { box-shadow: none; }
-  50%       { box-shadow: inset 4px 0 12px rgba(236,72,153,0.06); }
+  50%       { box-shadow: inset 4px 0 12px rgba(236,72,153,0.045); }
 }
 @keyframes accentBarGrow {
   from { transform: scaleY(0); opacity: 0; }
@@ -217,10 +228,10 @@ html, body {
 
 .bar-anim {
   transform-origin: bottom;
-  animation: growUp 0.7s cubic-bezier(0.22,1,0.36,1) both;
+  animation: growUp 0.7s var(--ease-std) both;
 }
 .fade-up  { animation: fadeUp 0.45s ease both; }
-.tool-bar { animation: slideRight 0.8s cubic-bezier(0.22,1,0.36,1) both; }
+.tool-bar { animation: slideRight 0.8s var(--ease-std) both; }
 
 @keyframes popIn {
   from { opacity: 0; transform: scale(0.92) translateY(6px); }

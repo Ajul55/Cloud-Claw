@@ -9,9 +9,9 @@ interface Props {
 }
 
 const LANE_BADGE: Record<1 | 2 | 3, { label: string; bg: string; color: string; hoverBg: string }> = {
-  1: { label: 'API',       bg: '#EDE9FE', color: '#7C3AED', hoverBg: '#DDD6FE' },
-  2: { label: 'SSH/Read',  bg: '#EFF6FF', color: '#3B82F6', hoverBg: '#DBEAFE' },
-  3: { label: 'SSH/Write', bg: '#fee2e2', color: '#dc2626', hoverBg: '#FECACA' },
+  1: { label: 'API',       bg: '#F5F3FF', color: '#7E4CE6', hoverBg: '#EDE9FE' },
+  2: { label: 'SSH/Read',  bg: '#EFF6FF', color: '#3B69E0', hoverBg: '#DBEAFE' },
+  3: { label: 'SSH/Write', bg: '#FFF1F2', color: '#DB3B5A', hoverBg: '#FFE4E6' },
 };
 
 const TZ = 'Asia/Kolkata';

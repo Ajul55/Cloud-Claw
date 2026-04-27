@@ -27,7 +27,7 @@ export const managePhpDirectivesTool: Tool = {
         'removing a function from disable_functions, or any other php.ini tweak. ' +
         'Automatically reloads the correct php<version>cs-fpm service after editing. ' +
         'For disable_functions, set action="remove_from_list" and value="function_name" to unblock a single function.',
-    approvalTier: 2,
+    approvalTier: 3,
     parameters: {
         type: 'object',
         properties: {

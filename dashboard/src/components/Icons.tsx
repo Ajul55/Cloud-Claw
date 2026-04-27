@@ -1,6 +1,7 @@
 /**
- * SVG icon system — Lucide-compatible paths, 24×24 viewBox.
- * All icons are stroke-based, no fill, theme-aware via `color` prop.
+ * SVG icon system — Refined outline style, 24×24 viewBox.
+ * All icons use stroke="currentColor", fill="none", strokeWidth="1.8".
+ * Rounded caps and joins for a premium SaaS feel.
  */
 import React from 'react';
 
@@ -15,7 +16,7 @@ export interface IconProps {
 function Icon({
   size = 18,
   color = 'currentColor',
-  strokeWidth = 1.75,
+  strokeWidth = 1.8,
   style,
   className,
   children,

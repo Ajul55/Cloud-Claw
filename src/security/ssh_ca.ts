@@ -21,10 +21,13 @@
  *   echo "cert-authority $(cat cloudclaw-ca.pub)" >> /root/.ssh/authorized_keys
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { existsSync, unlinkSync, readFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { env } from '../config/env.js';
+
+const execFileAsync = promisify(execFile);
 
 const CERT_VALIDITY = '+1h';              // cert expires in 1 hour
 const CLEANUP_DELAY_MS = 70 * 60 * 1000;  // clean up cert file after 70 minutes
@@ -62,27 +65,25 @@ export async function getSignedCert(): Promise<string | null> {
     const certPath = `/tmp/${certId}-cert.pub`;
 
     try {
-        // Sign the public key with the CA private key
+        // Sign the public key with the CA private key.
+        // Using execFile (not execSync/exec) to avoid shell injection and
+        // to prevent blocking the event loop during certificate signing.
         // -s: signing key (CA private key)
         // -I: certificate identity (for audit logs)
         // -n: principal (username allowed to use this cert)
         // -V: validity period
         // -z: serial number
-        execSync(
-            `ssh-keygen -s "${caKeyPath}" ` +
-            `-I "${certId}" ` +
-            `-n "${env.SSH_USER}" ` +
-            `-V "${CERT_VALIDITY}" ` +
-            `-z 1 ` +
-            `"${pubKeyPath}" ` +
-            `-O no-port-forwarding ` +
-            `-O no-agent-forwarding ` +
-            `-O no-x11-forwarding`,
-            {
-                stdio: 'pipe',
-                timeout: 10_000,
-            },
-        );
+        await execFileAsync('ssh-keygen', [
+            '-s', caKeyPath,
+            '-I', certId,
+            '-n', env.SSH_USER ?? 'root',
+            '-V', CERT_VALIDITY,
+            '-z', '1',
+            pubKeyPath,
+            '-O', 'no-port-forwarding',
+            '-O', 'no-agent-forwarding',
+            '-O', 'no-x11-forwarding',
+        ], { timeout: 10_000 });
 
         // ssh-keygen outputs to <pubKeyPath>-cert.pub, we need to find it
         const expectedOutputPath = pubKeyPath.replace(/\.pub$/, '-cert.pub');

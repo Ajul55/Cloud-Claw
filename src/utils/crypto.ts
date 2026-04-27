@@ -3,8 +3,13 @@
  * Used to encrypt SSH private keys stored in the users table.
  */
 
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, createVerify, randomBytes } from 'crypto';
 import { env } from '../config/env.js';
+
+/** Decode a base64url-encoded string (JWT uses base64url, not standard base64). */
+function base64urlDecode(str: string): Buffer {
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
 
 const CIPHER = 'aes-256-gcm';
 
@@ -32,27 +37,56 @@ export function encrypt(plaintext: string): string {
 }
 
 /**
- * Decode the user_id from a Cloudstick API secret JWT.
- * The JWT payload looks like: {"user_id":48,"plan_id":1,"role":"customer",...}
- * We decode without verifying the signature — the API server handles that.
+ * Decode the user_id from a Cloudstick API secret JWT and verify its signature.
  *
- * Trust boundary: signature verification is intentionally skipped here.
- * This token comes from setup-time admin configuration (env var or DB row),
- * not from an untrusted HTTP request. The private key that signed it is not
- * available to the application layer — only the Cloudstick backend can verify
- * it. We trust the value because it was written by an admin during onboarding.
+ * When CLOUDSTICK_JWT_PUBLIC_KEY is set (PEM-format EC public key), the ES256
+ * signature is verified using the P-256 curve before trusting the payload.
+ * A forged or tampered token will throw rather than return a user_id.
  *
- * @returns The numeric user_id from the JWT payload
- * @throws Error if the token is malformed or missing user_id
+ * When the key is not set, the payload is decoded with a startup warning — this
+ * maintains backward compatibility but leaves token forgery possible. Set the key
+ * in production to close this gap.
+ *
+ * @returns The numeric user_id from the verified JWT payload
+ * @throws Error if the token is malformed, missing user_id, or signature invalid
  */
 export function decodeCloudstickJwtUserId(jwtSecret: string): string {
     const parts = jwtSecret.split('.');
     if (parts.length !== 3) {
         throw new Error('Invalid Cloudstick API secret format — expected a JWT');
     }
+
+    const [header, payload, signature] = parts;
+
+    const publicKeyPem = env.CLOUDSTICK_JWT_PUBLIC_KEY;
+    if (publicKeyPem) {
+        let valid = false;
+        try {
+            const verifier = createVerify('SHA256');
+            verifier.update(`${header}.${payload}`);
+            // JWT ES256 uses IEEE P1363 encoding (raw R||S), not DER
+            valid = verifier.verify(
+                { key: publicKeyPem, dsaEncoding: 'ieee-p1363' },
+                base64urlDecode(signature),
+            );
+        } catch (err) {
+            throw new Error(
+                `Cloudstick JWT signature verification error: ${err instanceof Error ? err.message : String(err)}`
+            );
+        }
+        if (!valid) {
+            throw new Error('Cloudstick JWT signature verification failed — token may be forged or tampered');
+        }
+    } else {
+        console.warn(
+            '[crypto] CLOUDSTICK_JWT_PUBLIC_KEY not set — JWT signature not verified. ' +
+            'Set this in .env to prevent token forgery during /setup.'
+        );
+    }
+
     try {
-        const payload = Buffer.from(parts[1], 'base64').toString('utf8');
-        const parsed = JSON.parse(payload) as { user_id?: number; [key: string]: unknown };
+        const decoded = Buffer.from(payload, 'base64').toString('utf8');
+        const parsed = JSON.parse(decoded) as { user_id?: number; [key: string]: unknown };
         if (!parsed.user_id) {
             throw new Error('Cloudstick API secret is missing user_id in JWT payload');
         }

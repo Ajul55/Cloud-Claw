@@ -63,29 +63,29 @@ export function ThemePicker({ current, onChange }: Props) {
           }}>
             Color theme
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
             {Object.values(THEMES).map(t => (
               <div
                 key={t.id}
                 onClick={() => { onChange(t); setOpen(false); }}
                 style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
-                  cursor: 'pointer', padding: '6px 4px', borderRadius: 8,
-                  background: current.id === t.id ? '#f9fafb' : 'transparent',
-                  border: `1.5px solid ${current.id === t.id ? t.p : 'transparent'}`,
-                  transition: 'all 150ms',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                  cursor: 'pointer', padding: '8px 4px', borderRadius: 10,
+                  background: current.id === t.id ? `${t.p}0A` : 'transparent',
+                  border: `1.5px solid ${current.id === t.id ? t.p : '#f3f4f6'}`,
+                  transition: 'all 200ms ease',
                 }}
               >
                 <div style={{
-                  width: 28, height: 28, borderRadius: '50%',
-                  background: `linear-gradient(135deg,${t.d},${t.l})`,
-                  boxShadow: `0 2px 6px ${t.p}50`,
+                  width: 32, height: 32, borderRadius: '50%',
+                  background: `linear-gradient(135deg,${t.p},${t.l})`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   flexShrink: 0,
+                  opacity: 0.9,
                 }}>
-                  {current.id === t.id && <Check size={12} color="white" strokeWidth={2.5} />}
+                  {current.id === t.id && <Check size={14} color="white" strokeWidth={2.5} />}
                 </div>
-                <span style={{ fontSize: 9, color: '#6b7280', fontWeight: 500 }}>{t.label}</span>
+                <span style={{ fontSize: 9.5, color: '#6b7280', fontWeight: 600 }}>{t.label}</span>
               </div>
             ))}
           </div>

@@ -32,6 +32,22 @@ services:
     networks:
       - cloudclaw-net
 
+  # ─── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cloudclaw-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - cloudclaw-net
+
   # ─── Cloud-Claw Agent ───────────────────────────────────────────────────────
   cloudclaw:
     build:
@@ -41,6 +57,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     env_file:
       - .env.docker
@@ -58,6 +76,8 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  redis-data:
     driver: local
   cloudclaw-certs:
     driver: local
