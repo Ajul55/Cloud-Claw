@@ -12,10 +12,10 @@ This document tracks the final push for production readiness. It consolidates fi
 | Category | Total | Completed | Pending | Progress |
 |----------|-------|-----------|---------|----------|
 | 🔴 CRITICAL | 4 | 3 | 1 | 75% |
-| 🟠 HIGH | 11 | 8 | 3 | 73% |
-| 🟡 MEDIUM | 14 | 4 | 10 | 29% |
-| 🟢 LOW | 6 | 0 | 6 | 0% |
-| **Total** | **35** | **15** | **20** | **43%** |
+| 🟠 HIGH | 13 | 8 | 5 | 61% |
+| 🟡 MEDIUM | 16 | 4 | 12 | 25% |
+| 🟢 LOW | 9 | 0 | 9 | 0% |
+| **Total** | **42** | **15** | **27** | **36%** |
 
 ---
 
@@ -91,6 +91,26 @@ These issues present immediate security or stability risks that could result in 
   Create end-to-end tests for the tool execution and HITL resume flows.
 - [ ] **[MED-1] Fix Schema Constraints**  
   Repair the broken foreign key reference to the `accounts` table.
+
+---
+
+## 🛠️ Phase 5: Audit Remediation
+*Target: Resolve performance and minor security gaps identified in the 2026-04-27 audit.*
+
+- [ ] **[HIGH-12] Fix `manageWebsiteSettings` HITL Metadata**  
+  Add `getApprovalRequest` and `getRationale` to ensure write operations are gated.
+- [ ] **[HIGH-13] Patch Command Injection in WP Tools**  
+  Add strict input sanitization to all WordPress management parameters.
+- [ ] **[MED-15] Optimize Vector Search**  
+  Switch `pgvector` similarity search in `fix_memory.ts` to `ORDER BY ... LIMIT`.
+- [ ] **[MED-16] Implement Pagination for Cron Jobs**  
+  Add pagination to `list_server_cron_jobs` to prevent context exhaustion.
+- [ ] **[LOW-7] Add Timeout to Connection Check**  
+  Implement a 10s timeout for `check_cloudstick_connection` tool.
+- [ ] **[LOW-8] WordPress N+1 Cleanup**  
+  Refactor `getWordpressManagerSnapshot` to reduce redundant API calls.
+- [ ] **[LOW-9] Password Validation**  
+  Add length and complexity checks to `create_system_user` and `update_system_user`.
 
 ---
 
