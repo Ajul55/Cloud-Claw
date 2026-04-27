@@ -105,3 +105,39 @@ describe('injection vulnerability blocks', () => {
         expect(result.reason).toMatch(/Direct bash network redirects/);
     });
 });
+
+describe('write tool bypass (Tier 3)', () => {
+    it('allows sed -i when isWriteTool is true', () => {
+        const result = checkCommand('sed -i "s/typo/fix/g" /var/www/site.conf', true);
+        expect(result.safe).toBe(true);
+    });
+
+    it('blocks sed -i when isWriteTool is false', () => {
+        const result = checkCommand('sed -i "s/typo/fix/g" /var/www/site.conf', false);
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/not allowed/);
+    });
+
+    it('allows rm -rf on non-sensitive paths when isWriteTool is true', () => {
+        const result = checkCommand('rm -rf /tmp/mycache', true);
+        expect(result.safe).toBe(true);
+    });
+
+    it('still blocks sensitive paths even when isWriteTool is true', () => {
+        const result = checkCommand('cat /etc/shadow', true);
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Reading highly sensitive system files/);
+    });
+
+    it('still blocks fork bombs even when isWriteTool is true', () => {
+        const result = checkCommand(':(){ :|:& };:', true);
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/Fork bomb/);
+    });
+
+    it('still blocks rm --no-preserve-root even when isWriteTool is true', () => {
+        const result = checkCommand('rm -rf / --no-preserve-root', true);
+        expect(result.safe).toBe(false);
+        expect(result.reason).toMatch(/no-preserve-root/);
+    });
+});

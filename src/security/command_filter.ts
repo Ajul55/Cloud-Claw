@@ -149,19 +149,19 @@ const LANE3_WHITELIST: Array<[RegExp, string]> = [
 export function checkCommand(command: string, isWriteTool: boolean = false): FilterResult {
     const trimmed = command.trim();
 
-    // 1. Hard Block & Injection checks
-    for (const [pattern, reason] of BLOCKED_PATTERNS) {
-        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
-    }
-    for (const [pattern, reason] of SSH_KEY_INJECTION_PATTERNS) {
-        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
-    }
-    for (const [pattern, reason] of SENSITIVE_PATHS) {
+    // 1. Critical Hard Blocks & Injection checks (ALWAYS blocked, even for write tools)
+    const CRITICAL_BLOCKS: Array<[RegExp, string]> = [
+        [/:\(\)\{.*:\|:&.*\};:/i, 'Fork bomb detected'],
+        [/rm\s+.*--no-preserve-root/i, 'rm --no-preserve-root is not allowed'],
+        ...SSH_KEY_INJECTION_PATTERNS,
+        ...SENSITIVE_PATHS,
+    ];
+
+    for (const [pattern, reason] of CRITICAL_BLOCKS) {
         if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
     }
 
-    // Special case limitation for 'tail' length to prevent OOM
-    // FIX: Also check long-form `--lines` flag which bypassed the `-n` check
+    // Special case: tail length limit (Always enforced)
     if (trimmed.includes('tail ')) {
         const shortMatch = trimmed.match(/tail\s+.*-n\s*(\d+)/i);
         const longMatch = trimmed.match(/tail\s+.*--lines[= ]\s*(\d+)/i);
@@ -171,11 +171,18 @@ export function checkCommand(command: string, isWriteTool: boolean = false): Fil
         }
     }
 
-    // If this is a designated write tool (like execute_ssh_write), it will require
-    // explicit HITL approval anyway. We just need to ensure the hard blocks pass.
+    // 2. If this is a designated write tool (like execute_ssh_write), it will require
+    // explicit HITL approval anyway. We allow mutating commands here since the human 
+    // oversees the specific command string.
     if (isWriteTool) {
         return { safe: true };
     }
+
+    // 3. For read-only tools, block all mutating patterns
+    for (const [pattern, reason] of BLOCKED_PATTERNS) {
+        if (pattern.test(trimmed)) return { safe: false, reason: `🚫 BLOCKED: ${reason}` };
+    }
+
 
     // 2. Split chained/piped commands to validate each segment (respecting quotes)
     const subCommands: string[] = [];
