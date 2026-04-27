@@ -298,7 +298,7 @@ export async function upsertSession(
 
     const pool = getPool();
 
-    if (session.expectedVersion !== undefined) {
+    if (session.expectedVersion !== undefined && session.expectedVersion > 0) {
         // OCC: conditional update — only writes if version matches
         const result = await pool.query(
             `UPDATE sessions SET
@@ -493,7 +493,7 @@ export async function resolveApprovalAndSaveSession(
         }
 
         // 2. Save session
-        if (session.expectedVersion !== undefined) {
+        if (session.expectedVersion !== undefined && session.expectedVersion > 0) {
             await client.query(
                 `UPDATE sessions SET
                    reply_target  = $1,

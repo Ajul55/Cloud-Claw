@@ -241,6 +241,8 @@ async function _runAgentLoopBody(
 
     let iteration = 0;
     let internalSyntaxRetryUsed = false;
+    let hallucinationRetryCount = 0;
+    const MAX_HALLUCINATION_RETRIES = 2;
 
     // Fast-path: user explicitly typed proceed/approve/reject while an approval is pending
     const normalized = (message.text ?? '').trim().toLowerCase();
@@ -339,12 +341,19 @@ async function _runAgentLoopBody(
 
     // ─── Fix #12: Server disambiguation for generic prompts ────────────────
     // Placed AFTER session sanitization so persisted messages are clean.
-    let resolvedServer = intent.targetServer !== 'unknown' ? intent.targetServer : null;
-    if (!resolvedServer && message.text) {
-        const serverFromText = await resolveServerFromMessage(message.text);
-        if (serverFromText) {
-            resolvedServer = serverFromText.label;
-            logger.info('[loop] Server resolved via deterministic fallback', { resolvedServer });
+    // Pre-resolved server from the server-selection card takes precedence over
+    // everything — it skips classifier ambiguity and keeps the original intent text clean.
+    let resolvedServer: string | null = message.resolvedServerLabel ?? null;
+    if (resolvedServer) {
+        logger.info('[loop] Server pre-resolved from selection card — skipping classifier', { resolvedServer });
+    } else {
+        resolvedServer = intent.targetServer !== 'unknown' ? intent.targetServer : null;
+        if (!resolvedServer && message.text) {
+            const serverFromText = await resolveServerFromMessage(message.text);
+            if (serverFromText) {
+                resolvedServer = serverFromText.label;
+                logger.info('[loop] Server resolved via deterministic fallback', { resolvedServer });
+            }
         }
     }
 
@@ -516,8 +525,11 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
         // Fix #8: rebuild nginx hint per-iteration so it only appears when no tools have run
         let dynamicPromptHint = '';
+        if (resolvedServer && resolvedServer !== 'unknown') {
+            dynamicPromptHint += `[SYSTEM] The user has explicitly selected the server target: "${resolvedServer}". You MUST use this server name for your tools. Do not ask which server to use.\n\n`;
+        }
         if (requiresNginx && iteration === 1 && !hasReceipt(executionReceipts, 'diagnose_nginx', true, RECEIPT_FRESHNESS_MS)) {
-            dynamicPromptHint = 'Hint: this query is likely nginx-related. Start with diagnose_nginx unless PHP or MySQL symptoms are more prominent.\n\n';
+            dynamicPromptHint += 'Hint: this query is likely nginx-related. Start with diagnose_nginx unless PHP or MySQL symptoms are more prominent.\n\n';
         }
         const fullSystemPrompt = dynamicPromptHint + baseSystemPrompt;
 
@@ -755,8 +767,17 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             if (isHallucination) {
                 logger.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution', undefined, { receipts: [...executionReceipts.keys()] });
-                await indicator?.update('⚠️ Need real diagnostics — re-running with tools...');
-                await onReply('⚠️ I need to verify this with real diagnostics. Running tools now — you may see a short pause.');
+                if (hallucinationRetryCount >= MAX_HALLUCINATION_RETRIES) {
+                    logger.warn('[loop] Max hallucination retries reached — breaking loop');
+                    await indicator?.stop();
+                    await onReply('⚠️ Unable to complete diagnostics automatically. Please try again or be more specific.');
+                    break;
+                }
+                if (hallucinationRetryCount === 0) {
+                    await indicator?.update('⚠️ Need real diagnostics — re-running with tools...');
+                    await onReply('⚠️ I need to verify this with real diagnostics. Running tools now — you may see a short pause.');
+                }
+                hallucinationRetryCount++;
                 messages.push({ role: 'assistant', content: text });
                 messages.push({
                     role: 'user',
