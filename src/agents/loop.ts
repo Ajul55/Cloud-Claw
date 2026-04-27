@@ -348,6 +348,25 @@ async function _runAgentLoopBody(
         }
     }
 
+    // ─── CONTEXTUAL FALLBACK ──────────────────────────────────────────────
+    // If we still don't have a server, check the last turn's history.
+    // This handles follow-up requests like "restart it" or "check nginx"
+    // when the server was already identified in the previous turn.
+    if (!resolvedServer || resolvedServer === 'unknown') {
+        // Only look at the last 5 messages to avoid stale context
+        const contextHistory = messages.slice(-5).reverse();
+        for (const msg of contextHistory) {
+            if (typeof msg.content === 'string') {
+                const s = await resolveServerFromMessage(msg.content);
+                if (s) {
+                    resolvedServer = s.label;
+                    logger.info('[loop] Server resolved via history context', { resolvedServer });
+                    break;
+                }
+            }
+        }
+    }
+
     const isGenericWithoutServer = intentRequiresServerTarget(intent)
         && (!resolvedServer || resolvedServer === 'unknown');
     if (intent.requiresServerClarification || isGenericWithoutServer) {
