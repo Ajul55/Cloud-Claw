@@ -26,25 +26,6 @@ export function startHealthServer(port = 9000, gatewayHandler?: RequestHandler):
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? '/';
 
-        // ── Serve Dashboard and its APIs ──────────────────────────────────────
-        const isDashboardApi = url.startsWith('/api/stats') || 
-                               url.startsWith('/api/sessions') || 
-                               url.startsWith('/api/servers') || 
-                               url.startsWith('/api/approvals') || 
-                               url.startsWith('/api/tools');
-        
-        if (url.startsWith('/dashboard') || isDashboardApi) {
-            try {
-                await handleDashboardRequest(req, res);
-            } catch (err) {
-                if (!res.headersSent) {
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Internal server error' }));
-                }
-            }
-            return;
-        }
-
         // ── Serve Cloudstick HTTP Gateway ─────────────────────────────────────
         if (gatewayHandler && url.startsWith('/api/')) {
             try {

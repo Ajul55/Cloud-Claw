@@ -89,9 +89,7 @@ export { type ToolReceipt, hasReceipt } from './session_manager.js';
 
 const MAX_ITERATIONS = 15;
 
-// CRIT-6: Per-session mutex — prevents concurrent loops on the same sessionId.
-// If a second message arrives while a loop is active, it waits for the first to finish.
-const _sessionMutex = new Map<string, Promise<void>>();
+import { acquireSessionLock, releaseSessionLock } from '../services/session_lock.js';
 
 // ─── Lazy load WRITE_TOOLS to prevent module init crashes ────────────────────
 let WRITE_TOOLS: Set<string> | null = null;
@@ -356,21 +354,19 @@ async function _runAgentLoopCore(
     onApproval: ApprovalFn,
     indicator?: StatusIndicator
 ): Promise<void> {
-    // CRIT-6: Session mutex — queue if another loop is active for this session
-    const existing = _sessionMutex.get(message.sessionId);
-    if (existing) {
-        logger.info('[loop] Session busy — queuing message', { sessionId: message.sessionId });
-        await existing;
+    // Per-session lock — prevents concurrent loops on the same sessionId.
+    // Redis SET NX EX when Redis is configured (multi-instance safe);
+    // falls back to in-memory queue for single-instance deploys.
+    const acquired = await acquireSessionLock(message.sessionId);
+    if (!acquired) {
+        logger.warn('[loop] Session locked by another instance — dropping message', { sessionId: message.sessionId });
+        return;
     }
-    let _resolveMutex!: () => void;
-    const _mutexPromise = new Promise<void>(r => { _resolveMutex = r; });
-    _sessionMutex.set(message.sessionId, _mutexPromise);
 
     try {
         await _runAgentLoopBody(message, onReply, onApproval, indicator);
     } finally {
-        _resolveMutex();
-        _sessionMutex.delete(message.sessionId);
+        await releaseSessionLock(message.sessionId);
     }
 }
 

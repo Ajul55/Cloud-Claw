@@ -117,12 +117,12 @@ These issues present immediate security or stability risks that could result in 
 ## 🔐 Phase 6: Security & API Hardening
 *Target: Final security lock-down before VPC deployment.*
 
-- [ ] **[CRIT-5] Authenticate Dashboard API**  
-  Add token-based authentication to `/api/stats`, `/api/sessions`, and other internal endpoints.
-- [ ] **[HIGH-14] Separate Health/Dashboard Ports**  
-  Move the dashboard API to a private internal port (e.g. 3001) to prevent exposure via the health port.
-- [ ] **[MED-17] Distributed Session Lock**  
-  Replace the in-memory version check in `loop.ts` with a Redis-based distributed lock.
+- [x] **[CRIT-5] Authenticate Dashboard API**  
+  Added `checkDashboardAuth` bearer token check (via `DASHBOARD_TOKEN` env var) gating all `/api/*` routes in `dashboard/server.ts`.
+- [x] **[HIGH-14] Separate Health/Dashboard Ports**  
+  Removed dashboard routing from port 9000. Dashboard now runs exclusively on `DASHBOARD_PORT` (default 3001) via `startDashboardServer`.
+- [x] **[MED-17] Distributed Session Lock**  
+  Created `session_lock.ts` with Redis `SET NX EX` lock; falls back to in-memory queue when Redis is not configured. `loop.ts` now uses `acquireSessionLock`/`releaseSessionLock`.
 
 ---
 

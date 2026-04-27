@@ -9,6 +9,16 @@ const DIST_DIR = path.resolve(process.cwd(), 'dist/public');
 const VALID_RANGES      = new Set<Range>(['24h', '7d', '30d']);
 const VALID_BURN_RANGES = new Set<BurnRange>(['7d', '14d', '30d']);
 
+function checkDashboardAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const token = process.env.DASHBOARD_TOKEN;
+    if (!token) return true; // auth disabled when token not configured
+    const header = req.headers['authorization'] ?? '';
+    if (header === `Bearer ${token}`) return true;
+    res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
+    res.end(JSON.stringify({ error: 'unauthorized' }));
+    return false;
+}
+
 function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string, isHashed = false): void {
     if (!fs.existsSync(filePath)) {
         res.writeHead(404);
@@ -45,6 +55,11 @@ export async function handleDashboardRequest(
 ): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const pathname = url.pathname;
+
+    // ── Auth gate for all API routes ─────────────────────────────────────────
+    if (pathname.startsWith('/api/')) {
+        if (!checkDashboardAuth(req, res)) return;
+    }
 
     // ── /api/stats ────────────────────────────────────────────────────────────
     if (pathname === '/api/stats') {

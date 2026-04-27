@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     // 1b. Health check endpoint + Cloudstick HTTP gateway
     startHealthServer(9000, env.CLOUDSTICK_GATEWAY_KEY ? createGatewayHandler() : undefined);
     if (env.DATABASE_URL) {
-        startDashboardServer(3001);
+        startDashboardServer(Number(process.env.DASHBOARD_PORT) || 3001);
     }
 
     // 2. Telegram (optional)
