@@ -67,8 +67,8 @@ These issues present immediate security or stability risks that could result in 
 
 - [x] **[HIGH-8] Structured Logging Migration**  
   Replace all `console.log` with `logger.*` for proper log aggregation.
-- [ ] **[HIGH-9] Enhance CI/CD Pipeline**  
-  Add Docker Push and SSH Deploy stages to GitHub Actions. *(Deferred — pending VPC purchase)*
+- [x] **[HIGH-9] Enhance CI/CD Pipeline**  
+  Docker Push to ghcr.io + SSH Deploy stages added to GitHub Actions. Server: 155.138.223.219.
 - [x] **[HIGH-2] Replace Redis KEYS**  
   Switch `getTotalActiveSessions` to use `SCAN` or a dedicated counter.
 - [x] **[HIGH-5] Optimize Message Trimming**  

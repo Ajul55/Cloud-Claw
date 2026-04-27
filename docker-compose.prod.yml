@@ -1,0 +1,10 @@
+# Production override — use the pre-built ghcr.io image instead of building from source.
+# Usage on the server:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --pull always
+#
+# IMAGE env var is set by the deploy script (e.g. ghcr.io/ajul55/cloud-claw:latest)
+
+services:
+  cloudclaw:
+    build: !reset null        # cancel the build directive from docker-compose.yml
+    image: ${CLOUDCLAW_IMAGE:-ghcr.io/ajul55/cloud-claw:latest}
