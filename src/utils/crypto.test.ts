@@ -29,7 +29,9 @@ describe('crypto utilities', () => {
             if (!ENCRYPTION_KEY) return;
             const encrypted = encrypt('test');
             const [iv, tag, ct] = encrypted.split(':');
-            const tampered = `${iv}:${tag}:${ct.replace(/^../, '00')}`;
+            // Guarantee tampering by flipping the first character
+            const tamperedChar = ct[0] === 'f' ? '0' : 'f';
+            const tampered = `${iv}:${tag}:${tamperedChar}${ct.slice(1)}`;
             expect(() => decrypt(tampered)).toThrow();
         });
     });
