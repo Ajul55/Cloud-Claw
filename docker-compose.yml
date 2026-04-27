@@ -6,7 +6,7 @@
 #
 # Pre-flight (run once before first start):
 #   mkdir -p ./keys          # required — Docker errors if this dir is missing
-#   cp .env.docker.example .env.docker && vi .env.docker
+#   cp .env.example .env && vi .env
 
 services:
   # ─── PostgreSQL ──────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env.docker
+      - .env
     volumes:
       # SSH keys — read-only bind mount (most secure method)
       # Run: mkdir -p ./keys  before first docker compose up
