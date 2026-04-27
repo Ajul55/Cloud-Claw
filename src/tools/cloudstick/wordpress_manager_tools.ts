@@ -10,35 +10,27 @@ import {
     toPrettyJson,
 } from './shared.js';
 
-async function getWordpressManagerSnapshot(website: string): Promise<{
-    context: Awaited<ReturnType<typeof resolveWebsiteContext>>;
-    data: Record<string, unknown>;
-}> {
-    const context = await resolveWebsiteContext(website);
-    const client = getCloudstickClient();
-    const userId = getEffectiveCloudstickUserId();
-
-    const [usersCount, pluginCount, urls, debugInfo, maintenanceMode, searchIndexMode] = await Promise.allSettled([
-        client.getWpUsersCount(context.websiteId, context.serverId, userId),
-        client.getWpPluginCount(context.websiteId, context.serverId, userId),
-        client.getWpUrls(context.websiteId, context.serverId, userId),
-        client.getWpDebugInfo(context.websiteId, context.serverId, userId),
-        client.getWpMaintenanceMode(context.websiteId, context.serverId, userId),
-        client.getWpSearchIndexMode(context.websiteId, context.serverId, userId),
-    ]);
-
-    return {
-        context,
-        data: {
-            users_count: usersCount.status === 'fulfilled' ? usersCount.value : null,
-            plugins_count: pluginCount.status === 'fulfilled' ? pluginCount.value : null,
-            urls: urls.status === 'fulfilled' ? urls.value : null,
-            debug: debugInfo.status === 'fulfilled' ? debugInfo.value : null,
-            maintenance: maintenanceMode.status === 'fulfilled' ? maintenanceMode.value : null,
-            search_index: searchIndexMode.status === 'fulfilled' ? searchIndexMode.value : null,
-        },
-    };
+function validateWordpressUrl(raw: unknown, fieldName: string): { ok: true; value: string } | { ok: false; error: string } {
+    const value = stringify(raw);
+    if (!value) {
+        return { ok: false, error: `${fieldName} is required.` };
+    }
+    let parsed: URL;
+    try {
+        parsed = new URL(value);
+    } catch {
+        return { ok: false, error: `${fieldName} must be a valid URL (e.g. https://example.com).` };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { ok: false, error: `${fieldName} must use http or https.` };
+    }
+    // Reject credentials embedded in URL (e.g. https://user:pass@host)
+    if (parsed.username || parsed.password) {
+        return { ok: false, error: `${fieldName} must not contain credentials.` };
+    }
+    return { ok: true, value };
 }
+
 
 function extractCount(raw: unknown, totalKeys: string[], activeKeys: string[]): { total: unknown; active: unknown } {
     return {
@@ -77,9 +69,17 @@ export const getWordpressStats = {
     tier: 1 as const,
     handler: async (args: Record<string, unknown>) => {
         try {
-            const { context, data } = await getWordpressManagerSnapshot(stringify(args.website));
-            const userStats = extractCount(data.users_count, ['total_users', 'users_count', 'total'], ['active_users', 'active']);
-            const pluginStats = extractCount(data.plugins_count, ['total_plugins', 'plugins_count', 'total'], ['active_plugins', 'active']);
+            const context = await resolveWebsiteContext(stringify(args.website));
+            const client = getCloudstickClient();
+            const userId = getEffectiveCloudstickUserId();
+            const [usersCountResult, pluginCountResult] = await Promise.allSettled([
+                client.getWpUsersCount(context.websiteId, context.serverId, userId),
+                client.getWpPluginCount(context.websiteId, context.serverId, userId),
+            ]);
+            const usersCountRaw = usersCountResult.status === 'fulfilled' ? usersCountResult.value : null;
+            const pluginCountRaw = pluginCountResult.status === 'fulfilled' ? pluginCountResult.value : null;
+            const userStats = extractCount(usersCountRaw, ['total_users', 'users_count', 'total'], ['active_users', 'active']);
+            const pluginStats = extractCount(pluginCountRaw, ['total_plugins', 'plugins_count', 'total'], ['active_plugins', 'active']);
 
             return {
                 success: true,
@@ -139,13 +139,17 @@ export const changeWordpressSiteUrl = {
         }
     },
     handler: async (args: Record<string, unknown>) => {
+        const urlCheck = validateWordpressUrl(args.new_site_url, 'new_site_url');
+        if (!urlCheck.ok) {
+            return { success: false, output: urlCheck.error };
+        }
         try {
             const context = await resolveWebsiteContext(stringify(args.website));
             const response = await getCloudstickClient().updateWpUrls(
                 context.websiteId,
                 context.serverId,
                 getEffectiveCloudstickUserId(),
-                { site_url: stringify(args.new_site_url) },
+                { site_url: urlCheck.value },
             );
 
             return {
@@ -199,13 +203,17 @@ export const changeWordpressDomainUrl = {
         }
     },
     handler: async (args: Record<string, unknown>) => {
+        const urlCheck = validateWordpressUrl(args.new_domain_url, 'new_domain_url');
+        if (!urlCheck.ok) {
+            return { success: false, output: urlCheck.error };
+        }
         try {
             const context = await resolveWebsiteContext(stringify(args.website));
             const response = await getCloudstickClient().updateWpUrls(
                 context.websiteId,
                 context.serverId,
                 getEffectiveCloudstickUserId(),
-                { home_url: stringify(args.new_domain_url) },
+                { home_url: urlCheck.value },
             );
 
             return {

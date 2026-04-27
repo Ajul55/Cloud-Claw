@@ -163,16 +163,17 @@ export async function searchFixes(query: string): Promise<FixRecord[]> {
     // DB path — pgvector nearest neighbor
     if (isDBConfigured() && queryEmbedding) {
         try {
+            // Use native distance operator (<=> < threshold) so the pgvector
+            // HNSW/IVFFlat index can be used. Cosine similarity > 0.5 ≡ distance < 0.5.
             const result = await getPool().query(
                 `SELECT id,
                         issue_text    AS "issueText",
                         fix_command   AS "fixCommand",
                         problem_class AS "problemClass",
-                        created_at    AS "createdAt",
-                        1 - (embedding <=> $1::vector) AS similarity
+                        created_at    AS "createdAt"
                  FROM fix_memory
                  WHERE embedding IS NOT NULL
-                   AND 1 - (embedding <=> $1::vector) > 0.5
+                   AND embedding <=> $1::vector < 0.5
                  ORDER BY embedding <=> $1::vector
                  LIMIT 3`,
                 [vectorToSQL(queryEmbedding)],

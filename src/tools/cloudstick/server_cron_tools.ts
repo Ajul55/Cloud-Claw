@@ -17,17 +17,21 @@ const userId = () => getCloudstickUser()?.cloudstick_user_id
 
 // ─── List Server Cron Jobs (Tier 1) ──────────────────────────────────────────
 
+const PAGE_SIZE_DEFAULT = 20;
+
 const listServerCronJobsTool: Tool = {
     name: 'list_server_cron_jobs',
     description:
-        'List all server-level cron jobs on a Cloudstick server. ' +
+        'List server-level cron jobs on a Cloudstick server with pagination. ' +
         'Returns job IDs, labels, schedules, and commands. ' +
-        'Use this to inspect existing server crons before creating or deleting one.',
+        'Use page/page_size to avoid context exhaustion on servers with many cron jobs.',
     parameters: {
         type: 'object',
         properties: {
             server_id: { type: 'string', description: 'Cloudstick server ID' },
             server_label: { type: 'string', description: 'Human-readable server label' },
+            page: { type: 'number', description: 'Page number (1-based, default: 1)' },
+            page_size: { type: 'number', description: `Jobs per page (default: ${PAGE_SIZE_DEFAULT}, max: 100)` },
         },
         required: ['server_id'],
     },
@@ -36,7 +40,33 @@ const listServerCronJobsTool: Tool = {
         try {
             const client = getCloudstickClient();
             const result = await client.listServerCronJobs(String(args.server_id), userId());
-            return { success: true, output: `Server cron jobs:\n${JSON.stringify(result, null, 2)}` };
+
+            // Extract the jobs array from whatever the API returns
+            let jobs: unknown[] = [];
+            if (Array.isArray(result)) {
+                jobs = result;
+            } else if (result && typeof result === 'object') {
+                const r = result as Record<string, unknown>;
+                const candidate = r.cron_jobs ?? r.crons ?? r.data ?? r.message;
+                if (Array.isArray(candidate)) {
+                    jobs = candidate;
+                }
+            }
+
+            const totalJobs = jobs.length;
+
+            if (totalJobs === 0) {
+                return { success: true, output: 'No cron jobs found on this server.' };
+            }
+
+            const page = Math.max(1, Number(args.page ?? 1));
+            const pageSize = Math.min(100, Math.max(1, Number(args.page_size ?? PAGE_SIZE_DEFAULT)));
+            const totalPages = Math.ceil(totalJobs / pageSize);
+            const offset = (page - 1) * pageSize;
+            const pageJobs = jobs.slice(offset, offset + pageSize);
+
+            const header = `Server cron jobs (page ${page}/${totalPages}, showing ${pageJobs.length} of ${totalJobs}):`;
+            return { success: true, output: `${header}\n${JSON.stringify(pageJobs, null, 2)}` };
         } catch (err) {
             return { success: false, output: `Failed to list server cron jobs: ${err instanceof Error ? err.message : String(err)}` };
         }

@@ -24,8 +24,17 @@ export const checkCloudstickConnectionTool: Tool = {
 
         try {
             const client = getCloudstickClient();
-            // Test connection with a lightweight read operation
-            await client.listPlans(effectiveUserId);
+            const timeoutMs = 10_000;
+            const timeoutSignal = AbortSignal.timeout(timeoutMs);
+
+            await Promise.race([
+                client.listPlans(effectiveUserId),
+                new Promise<never>((_, reject) =>
+                    timeoutSignal.addEventListener('abort', () =>
+                        reject(new Error(`Connection check timed out after ${timeoutMs / 1000}s`))
+                    )
+                ),
+            ]);
             return {
                 success: true,
                 output: `Cloudstick API connection successful! Credentials for User ID ${effectiveUserId} are mapped and API requests are succeeding.`,

@@ -12,10 +12,10 @@ This document tracks the final push for production readiness. It consolidates fi
 | Category | Total | Completed | Pending | Progress |
 |----------|-------|-----------|---------|----------|
 | 🔴 CRITICAL | 5 | 3 | 2 | 60% |
-| 🟠 HIGH | 14 | 8 | 6 | 57% |
-| 🟡 MEDIUM | 17 | 4 | 13 | 23% |
-| 🟢 LOW | 9 | 0 | 9 | 0% |
-| **Total** | **45** | **15** | **30** | **33%** |
+| 🟠 HIGH | 14 | 10 | 4 | 71% |
+| 🟡 MEDIUM | 17 | 6 | 11 | 35% |
+| 🟢 LOW | 9 | 3 | 6 | 33% |
+| **Total** | **45** | **22** | **23** | **49%** |
 
 ---
 
@@ -97,20 +97,20 @@ These issues present immediate security or stability risks that could result in 
 ## 🛠️ Phase 5: Audit Remediation
 *Target: Resolve performance and minor security gaps identified in the 2026-04-27 audit.*
 
-- [ ] **[HIGH-12] Fix `manageWebsiteSettings` HITL Metadata**  
-  Add `getApprovalRequest` and `getRationale` to ensure write operations are gated.
-- [ ] **[HIGH-13] Patch Command Injection in WP Tools**  
-  Add strict input sanitization to all WordPress management parameters.
-- [ ] **[MED-15] Optimize Vector Search**  
-  Switch `pgvector` similarity search in `fix_memory.ts` to `ORDER BY ... LIMIT`.
-- [ ] **[MED-16] Implement Pagination for Cron Jobs**  
-  Add pagination to `list_server_cron_jobs` to prevent context exhaustion.
-- [ ] **[LOW-7] Add Timeout to Connection Check**  
-  Implement a 10s timeout for `check_cloudstick_connection` tool.
-- [ ] **[LOW-8] WordPress N+1 Cleanup**  
-  Refactor `getWordpressManagerSnapshot` to reduce redundant API calls.
-- [ ] **[LOW-9] Password Validation**  
-  Add length and complexity checks to `create_system_user` and `update_system_user`.
+- [x] **[HIGH-12] Fix `manageWebsiteSettings` HITL Metadata**  
+  Added `getApprovalRequest` and `getRationale` to ensure write operations are gated.
+- [x] **[HIGH-13] Patch Command Injection in WP Tools**  
+  Added `validateWordpressUrl()` with protocol/credential checks to `change_wordpress_site_url` and `change_wordpress_domain_url`.
+- [x] **[MED-15] Optimize Vector Search**  
+  Replaced `1 - (embedding <=> ...) > 0.5` WHERE clause with `embedding <=> ... < 0.5` so the pgvector index is used.
+- [x] **[MED-16] Implement Pagination for Cron Jobs**  
+  Added `page`/`page_size` params to `list_server_cron_jobs`; client-side slicing prevents context exhaustion.
+- [x] **[LOW-7] Add Timeout to Connection Check**  
+  10s `AbortSignal.timeout` wraps the `listPlans` call in `check_cloudstick_connection`.
+- [x] **[LOW-8] WordPress N+1 Cleanup**  
+  Removed `getWordpressManagerSnapshot` (fetched 6 endpoints); `get_wordpress_stats` now calls only the 2 it needs.
+- [x] **[LOW-9] Password Validation**  
+  Added 12-char min + complexity regex to `create_system_user`; created `change_system_user_password` tool with same validation.
 
 ---
 

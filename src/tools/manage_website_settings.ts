@@ -3,6 +3,7 @@ import { getCloudstickClient } from '../api/cloudstick_client.js';
 import { getCloudstickUser } from '../api/cloudstick_context.js';
 import { resolveServerArg, formatServerTarget } from '../utils/server_registry.js';
 import { env } from '../config/env.js';
+import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 
 export const manageWebsiteSettingsTool: Tool = {
     name: 'manage_website_settings',
@@ -50,7 +51,46 @@ export const manageWebsiteSettingsTool: Tool = {
         },
         required: ['action', 'website_id'],
     },
-    approvalTier: 3, // Write operations — require HITL approval
+    approvalTier: 3,
+    getRationale: (args) => {
+        const action = String(args.action ?? 'unknown');
+        const websiteId = String(args.website_id ?? 'unknown');
+        const target = String(args.server_label ?? args.server_id ?? 'unknown server');
+        const detail: Record<string, string> = {
+            suspend: `Suspend website ${websiteId} on ${target}.`,
+            unsuspend: `Unsuspend website ${websiteId} on ${target}.`,
+            rebuild: `Rebuild website ${websiteId} on ${target}. This will restart the site stack.`,
+            change_stack: `Change stack type to "${args.stack_type}" for website ${websiteId} on ${target}.`,
+            change_php_version: `Change PHP version to ${args.php_version} for website ${websiteId} on ${target}.`,
+            change_php_config: `Update PHP configuration for website ${websiteId} on ${target}.`,
+            change_public_path: `Change public path to "${args.public_path}" for website ${websiteId} on ${target}.`,
+        };
+        return detail[action] ?? `Perform "${action}" on website ${websiteId} on ${target}.`;
+    },
+    getApprovalRequest: (args) => ({
+        command: encodeToolApprovalCommand('manage_website_settings', {
+            action: String(args.action ?? ''),
+            website_id: String(args.website_id ?? ''),
+            server_id: String(args.server_id ?? ''),
+            server_label: String(args.server_label ?? ''),
+        }),
+        targetHost: String(args.server_label ?? args.server_id ?? 'unknown'),
+        rationale: (() => {
+            const action = String(args.action ?? 'unknown');
+            const websiteId = String(args.website_id ?? 'unknown');
+            const target = String(args.server_label ?? args.server_id ?? 'unknown server');
+            const detail: Record<string, string> = {
+                suspend: `Suspend website ${websiteId} on ${target}.`,
+                unsuspend: `Unsuspend website ${websiteId} on ${target}.`,
+                rebuild: `Rebuild website ${websiteId} on ${target}. This will restart the site stack.`,
+                change_stack: `Change stack type to "${args.stack_type}" for website ${websiteId} on ${target}.`,
+                change_php_version: `Change PHP version to ${args.php_version} for website ${websiteId} on ${target}.`,
+                change_php_config: `Update PHP configuration for website ${websiteId} on ${target}.`,
+                change_public_path: `Change public path to "${args.public_path}" for website ${websiteId} on ${target}.`,
+            };
+            return detail[action] ?? `Perform "${action}" on website ${websiteId} on ${target}.`;
+        })(),
+    }),
     execute: async (args) => {
         const effectiveUserId = getCloudstickUser()?.cloudstick_user_id ?? env.CLOUDSTICK_USER_ID;
         if (!effectiveUserId) {
