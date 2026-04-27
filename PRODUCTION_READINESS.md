@@ -11,11 +11,11 @@ This document tracks the final push for production readiness. It consolidates fi
 
 | Category | Total | Completed | Pending | Progress |
 |----------|-------|-----------|---------|----------|
-| 🔴 CRITICAL | 4 | 3 | 1 | 75% |
-| 🟠 HIGH | 13 | 8 | 5 | 61% |
-| 🟡 MEDIUM | 16 | 4 | 12 | 25% |
+| 🔴 CRITICAL | 5 | 3 | 2 | 60% |
+| 🟠 HIGH | 14 | 8 | 6 | 57% |
+| 🟡 MEDIUM | 17 | 4 | 13 | 23% |
 | 🟢 LOW | 9 | 0 | 9 | 0% |
-| **Total** | **42** | **15** | **27** | **36%** |
+| **Total** | **45** | **15** | **30** | **33%** |
 
 ---
 
@@ -111,6 +111,18 @@ These issues present immediate security or stability risks that could result in 
   Refactor `getWordpressManagerSnapshot` to reduce redundant API calls.
 - [ ] **[LOW-9] Password Validation**  
   Add length and complexity checks to `create_system_user` and `update_system_user`.
+
+---
+
+## 🔐 Phase 6: Security & API Hardening
+*Target: Final security lock-down before VPC deployment.*
+
+- [ ] **[CRIT-5] Authenticate Dashboard API**  
+  Add token-based authentication to `/api/stats`, `/api/sessions`, and other internal endpoints.
+- [ ] **[HIGH-14] Separate Health/Dashboard Ports**  
+  Move the dashboard API to a private internal port (e.g. 3001) to prevent exposure via the health port.
+- [ ] **[MED-17] Distributed Session Lock**  
+  Replace the in-memory version check in `loop.ts` with a Redis-based distributed lock.
 
 ---
 
