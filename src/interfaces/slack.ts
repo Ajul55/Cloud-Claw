@@ -365,8 +365,60 @@ export function createSlackApp(): SlackAppInstance {
             }
         };
 
-        // Re-enter the loop with the server label as the message text.
-        await handleMessage(serverLabel, userId, channelId, postSay, client);
+        // Recover the original user intent text from the session so the intent
+        // classifier sees the real request, not just the server label.
+        // Pass resolvedServerLabel separately so the loop skips server disambiguation
+        // without mangling the intent text (which caused classifier misrouting).
+        const cloudstickUserForSession = await getUserBySlackUserId(userId);
+        const sessionIdForLabel = cloudstickUserForSession
+            ? `cloudstick:${cloudstickUserForSession.cloudstick_account_id}`
+            : `slack:${userId}`;
+        const existingSessionForLabel = await getSession(sessionIdForLabel);
+        const originalIntent = (existingSessionForLabel?.messages ?? [])
+            .filter((m: any) => m.role === 'user')
+            .slice(-1)[0]?.content as string ?? '';
+        const intentText = originalIntent && originalIntent.toLowerCase() !== serverLabel.toLowerCase()
+            ? originalIntent
+            : serverLabel;
+
+        const cloudstickCtx = cloudstickUserForSession ?? undefined;
+        const sessionIdCtx = sessionIdForLabel;
+        const planTierCtx = cloudstickUserForSession?.plan_tier ?? null;
+
+        const onReplyForLabel: ReplyFn = async (response, options) => {
+            if (options?.blocks) {
+                await client.chat.postMessage({ channel: channelId, text: response, blocks: options.blocks });
+            } else {
+                const chunks = splitMessage(response, 3000);
+                for (const chunk of chunks) {
+                    await postSay(chunk);
+                }
+            }
+        };
+
+        const onApprovalForLabel: ApprovalFn = async (context) => {
+            const { slackBlocks } = buildApprovalMessage(context);
+            await client.chat.postMessage({ channel: channelId, text: '⚠️ Action requires confirmation', blocks: slackBlocks });
+        };
+
+        const runLabelLoop = () => runAgentLoop(
+            {
+                sessionId: sessionIdCtx,
+                channel: cloudstickCtx ? 'cloudstick' : 'slack',
+                userId,
+                text: intentText,
+                replyTarget: channelId,
+                resolvedServerLabel: serverLabel,
+            },
+            onReplyForLabel,
+            onApprovalForLabel,
+        );
+
+        if (cloudstickCtx) {
+            await runWithCloudstickContext(cloudstickCtx, runLabelLoop);
+        } else {
+            await runLabelLoop();
+        }
     });
 
     // ─── Interactive: Clarification — Cancel ──────────────────────────────────

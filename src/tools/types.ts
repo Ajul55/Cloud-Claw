@@ -60,6 +60,10 @@ export interface IncomingMessage {
     planTier?: 'starter' | 'pro' | 'business';
     /** AbortSignal for hard timeout — check at each loop iteration. */
     signal?: AbortSignal;
+    /** Pre-resolved server label from the server-selection card.
+     *  When set, the loop skips server disambiguation and uses this label directly,
+     *  preserving the original user intent text without mangling it. */
+    resolvedServerLabel?: string;
 }
 
 /** Callback used by the loop to send text back to the user */
