@@ -32,8 +32,8 @@ import OpenAI from 'openai';
 import { env } from '../config/env.js';
 import { getLLMClient } from '../llm/provider.js';
 import { getSession, upsertSession, createApproval, getLatestPendingApproval } from '../database/db.js';
-import { getLLMToolDefinitions, getToolByName, getAllTools } from '../tools/tool_registry.js';
-import { encodeToolApprovalCommand, isInternalApprovalArg, isSensitiveApprovalArg } from '../hitl/tool_approval.js';
+import { getLLMToolDefinitions, getToolByName } from '../tools/tool_registry.js';
+import { encodeToolApprovalCommand } from '../hitl/tool_approval.js';
 import { recordToolUsage } from '../telemetry/ssh_escalation_analyzer.js';
 import { checkCommand, requiresApproval, isWriteCommand } from '../security/command_filter.js';
 import { classifyIntent, type Intent } from './intent_classifier.js';
@@ -56,7 +56,6 @@ import { recordLLMProviderSuccess, recordLLMProviderFailure } from '../llm/provi
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import {
     getAllServers,
-    type ServerNode,
     getServerByIp,
     getServerByLabel,
     resolveAllServers,
@@ -73,7 +72,6 @@ import {
     type ToolReceipt,
     hashOutput,
     loadReceiptsFromSession,
-    serializeReceipts,
     recordReceipt,
     hasReceipt,
     RECEIPT_FRESHNESS_MS,
@@ -83,236 +81,39 @@ import {
     buildProgressSummary,
     stripEphemeralMessages,
 } from './session_manager.js';
+import {
+    SSH_TOOLS,
+    SSH_CALL_LIMITS,
+    MEMORY_TOOLS,
+    SENSITIVE_PATTERNS,
+    getWriteTools,
+    loadSuppressedTools,
+    serializeWithSuppressedTools,
+} from './loop_constants.js';
+import {
+    toolSupportsServerRouting,
+    hydrateServerToolArgs,
+    intentRequiresServerTarget,
+    isNewWebsiteCreationRequest,
+    EXISTING_WEBSITE_ATTACH_TOOLS,
+} from './loop_routing.js';
+import { extractCompletionChoice } from './loop_llm.js';
+import {
+    encodeApprovalArgs,
+    getTargetHostDisplay,
+    getToolApprovalRequest,
+    withTimeout,
+} from './loop_approval.js';
 
 // Re-export for backward compatibility (hallucination_guard.ts, tests)
 export { type ToolReceipt, hasReceipt } from './session_manager.js';
+// Re-export public API previously defined in this file.
+export { hydrateServerToolArgs, intentRequiresServerTarget, isNewWebsiteCreationRequest };
+export { extractCompletionChoice };
 
 const MAX_ITERATIONS = 15;
 
 import { acquireSessionLock, releaseSessionLock } from '../services/session_lock.js';
-
-// ─── Lazy load WRITE_TOOLS to prevent module init crashes ────────────────────
-let WRITE_TOOLS: Set<string> | null = null;
-function getWriteTools(): Set<string> {
-    if (!WRITE_TOOLS) {
-        WRITE_TOOLS = new Set(getAllTools().filter(t => t.approvalTier === 3).map(t => t.name));
-    }
-    return WRITE_TOOLS;
-}
-
-// ─── Hoisted constants (avoid re-creating on every tool call) ──────────────────
-const SSH_TOOLS = new Set([
-    'execute_ssh_command', 'execute_ssh_write', 'diagnose_nginx',
-    'diagnose_services', 'diagnose_domain', 'fix_nginx_config',
-    'renew_ssl', 'manage_php', 'repair_mysql', 'cleanup_disk',
-    'fix_wordpress', 'create_nginx_vhost'
-]);
-
-const SSH_CALL_LIMITS: Record<string, number> = {
-    starter: 10,
-    pro: 30,
-    business: 50,
-};
-
-const MEMORY_TOOLS = new Set([
-    'fix_nginx_config', 'fix_wordpress', 'renew_ssl', 'manage_php',
-    'repair_mysql', 'cleanup_disk', 'execute_ssh_write', 'cloudflare_cache_purge',
-]);
-
-const SENSITIVE_PATTERNS = [
-    /private.*key/i, /ssh.*key/i, /password/i,
-    /secret/i, /token/i, /\.env/i,
-];
-
-// ─── Tools suppressed after an API tool succeeds ────────────────────────────
-// Stored in session receipts JSONB under the __suppressedTools key so state
-// persists across PM2 cluster workers and across HITL resume boundaries.
-// The key is intentionally prefixed with "__" so loadReceiptsFromSession()
-// ignores it (it fails the `typeof .toolName === 'string'` guard).
-
-const SUPPRESSED_TOOLS_KEY = '__suppressedTools';
-
-function loadSuppressedTools(raw: unknown): Set<string> {
-    if (raw && typeof raw === 'object') {
-        const entry = (raw as Record<string, unknown>)[SUPPRESSED_TOOLS_KEY];
-        if (Array.isArray(entry)) {
-            return new Set(entry.filter((v): v is string => typeof v === 'string'));
-        }
-    }
-    return new Set<string>();
-}
-
-function serializeWithSuppressedTools(
-    receipts: Map<string, ToolReceipt>,
-    suppressedTools: Set<string>
-): Record<string, unknown> {
-    const base: Record<string, unknown> = serializeReceipts(receipts);
-    if (suppressedTools.size > 0) {
-        base[SUPPRESSED_TOOLS_KEY] = [...suppressedTools];
-    }
-    return base;
-}
-
-
-// ─── Fix #9: encodeApprovalArgs — no double-encoding ─────────────────────────
-function encodeApprovalArgs(toolArgs: Record<string, unknown>): Record<string, string> {
-    return Object.fromEntries(
-        Object.entries(toolArgs)
-            .filter(([key]) => !isInternalApprovalArg(key) && !isSensitiveApprovalArg(key))
-            .map(([key, value]) => {
-                if (typeof value === 'string') return [key, value]; // already a string, never re-encode
-                if (Array.isArray(value) || (value && typeof value === 'object')) return [key, JSON.stringify(value)];
-                return [key, String(value ?? '')];
-            })
-    );
-}
-
-function getTargetHostDisplay(toolArgs: Record<string, unknown>): string {
-    const label = String(toolArgs.server_label ?? '').trim();
-    const host = String(toolArgs.host ?? '').trim();
-
-    if (label && host) return `${label} (${host})`;
-    if (host) return host;
-    if (label) return label;
-    return 'unknown';
-}
-
-function toolSupportsServerRouting(tool: { parameters: { properties: Record<string, unknown> } }): boolean {
-    return Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'server_label')
-        || Object.prototype.hasOwnProperty.call(tool.parameters.properties, 'host');
-}
-
-export function hydrateServerToolArgs(
-    toolArgs: Record<string, unknown>,
-    server: Pick<ServerNode, 'id' | 'label' | 'ip'>
-): void {
-    toolArgs.server_label = server.label;
-    toolArgs.host = server.ip;
-    if (server.id) {
-        toolArgs.server_id = String(server.id);
-    }
-}
-
-export function intentRequiresServerTarget(intent: Pick<Intent, 'requiresTool' | 'toolHint'>): boolean {
-    if (!intent.requiresTool) {
-        return false;
-    }
-
-    const hintedTool = intent.toolHint !== 'none'
-        ? getToolByName(intent.toolHint)
-        : null;
-
-    if (!hintedTool) {
-        return true;
-    }
-
-    return toolSupportsServerRouting(hintedTool);
-}
-
-const EXISTING_WEBSITE_ATTACH_TOOLS = new Set(['add_subdomain', 'add_domain_to_website']);
-
-export function isNewWebsiteCreationRequest(text: string): boolean {
-    const normalized = text.trim().toLowerCase();
-    if (!normalized) {
-        return false;
-    }
-
-    const asksToCreateSite = (
-        /\b(create|new|launch|spin\s*up|set\s*up|setup|build)\b/.test(normalized)
-        && /\b(website|site)\b/.test(normalized)
-    )
-        || /\bcreate_(wordpress|custom_php)_site\b/.test(normalized);
-
-    if (!asksToCreateSite) {
-        return false;
-    }
-
-    const explicitExistingSiteAttach = /\b(add|attach|alias|point|connect)\b/.test(normalized)
-        && /\b(subdomain|domain)\b/.test(normalized)
-        && /\b(existing|current)\b/.test(normalized);
-
-    const explicitAddSubdomainRequest = /\badd\s+(a\s+)?subdomain\b/.test(normalized)
-        || /\badd\s+domain\b/.test(normalized)
-        || /\battach\s+domain\b/.test(normalized);
-
-    return !explicitExistingSiteAttach && !explicitAddSubdomainRequest;
-}
-
-// ─── Fix #7: Simplified getToolApprovalRequest — registry lookup with fallback
-function getToolApprovalRequest(
-    toolName: string,
-    toolArgs: Record<string, unknown>
-): { command: string; targetHost: string; rationale: string } | null {
-    const tool = getToolByName(toolName);
-    if (!tool) return null;
-
-    // Check if tool has its own approval request builder
-    if (tool.getApprovalRequest) {
-        return tool.getApprovalRequest(toolArgs);
-    }
-
-    // Check approval tier from registry
-    if (tool.approvalTier === 3) {
-        return {
-            command: encodeToolApprovalCommand(toolName, encodeApprovalArgs(toolArgs)),
-            targetHost: getTargetHostDisplay(toolArgs),
-            rationale: tool.getRationale?.(toolArgs)
-                ?? `This action will run ${toolName} on ${getTargetHostDisplay(toolArgs)}.`,
-        };
-    }
-
-    return null;
-}
-
-// ─── Fix #6: Fanout timeout helper ────────────────────────────────────────────
-function withTimeout(
-    p: Promise<{ success: boolean; output: string }>,
-    ms: number,
-    label: string
-): Promise<{ success: boolean; output: string }> {
-    return Promise.race([
-        p,
-        new Promise<{ success: boolean; output: string }>(res =>
-            setTimeout(() => res({ success: false, output: `[${label}] Timed out after ${ms / 1000}s` }), ms)
-        ),
-    ]);
-}
-
-function summarizeLLMResponse(response: unknown): string {
-    if (response === null || response === undefined) {
-        return String(response);
-    }
-
-    if (typeof response !== 'object') {
-        return String(response);
-    }
-
-    try {
-        const record = response as Record<string, unknown>;
-        return JSON.stringify({
-            id: record.id,
-            object: record.object,
-            model: record.model,
-            choices: Array.isArray(record.choices) ? record.choices.length : record.choices,
-            error: record.error ?? null,
-        }).slice(0, 300);
-    } catch {
-        return '[unserializable response object]';
-    }
-}
-
-export function extractCompletionChoice(response: unknown): OpenAI.ChatCompletion.Choice {
-    const choices = (response as { choices?: OpenAI.ChatCompletion.Choice[] } | null | undefined)?.choices;
-    const choice = Array.isArray(choices) ? choices[0] : undefined;
-
-    if (!choice) {
-        throw new Error(
-            `LLM returned no choices. Provider payload preview: ${summarizeLLMResponse(response)}`,
-        );
-    }
-
-    return choice;
-}
 
 
 // ─── System prompt ─────────────────────────────────────────────────────────────
