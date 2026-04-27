@@ -56,6 +56,13 @@ export async function handleDashboardRequest(
     const url = new URL(req.url ?? '/', 'http://localhost');
     const pathname = url.pathname;
 
+    // ── Root redirect ───────────────────────────────────────────────────────
+    if (pathname === '/' || pathname === '') {
+        res.writeHead(302, { 'Location': '/dashboard/' });
+        res.end();
+        return;
+    }
+
     // ── Auth gate for all API routes ─────────────────────────────────────────
     if (pathname.startsWith('/api/')) {
         if (!checkDashboardAuth(req, res)) return;
