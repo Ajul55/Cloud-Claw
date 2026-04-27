@@ -971,6 +971,34 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 }
             }
 
+            // Security check for any "command" argument
+            const rawCommand = toolArgs.command as string | undefined;
+            if (rawCommand) {
+                const isWriteTool = toolName === 'execute_ssh_write';
+                const filterResult = checkCommand(rawCommand, isWriteTool);
+                if (!filterResult.safe) {
+                    const blockMsg = filterResult.reason ?? 'Command blocked by safety filter';
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: toolCall.id,
+                        content: `BLOCKED: ${blockMsg}`,
+                    });
+                    await onReply(`🚫 ${blockMsg}`);
+                    continue;
+                }
+
+                // Block write commands during audit
+                if (intent.isAudit && rawCommand && isWriteCommand(rawCommand)) {
+                    logger.warn('[loop] AUDIT GUARD blocked write command during audit', { rawCommand });
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: toolCall.id,
+                        content: `BLOCKED BY AUDIT GUARD: Write command blocked. You are in read-only audit mode. Add this to your recommendations — do not execute it.`,
+                    });
+                    continue;
+                }
+            }
+
             const toolApproval = getToolApprovalRequest(toolName, toolArgs);
             if (toolApproval) {
                 // ─── Fix 3: Pre-flight state snapshot ──────────────────────────
@@ -1049,102 +1077,79 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 return;
             }
 
-            // Security check for any "command" argument
-            const rawCommand = toolArgs.command as string | undefined;
-            if (rawCommand) {
-                const isWriteTool = toolName === 'execute_ssh_write';
-                const filterResult = checkCommand(rawCommand, isWriteTool);
-                if (!filterResult.safe) {
-                    const blockMsg = filterResult.reason ?? 'Command blocked by safety filter';
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: `BLOCKED: ${blockMsg}`,
-                    });
-                    await onReply(`🚫 ${blockMsg}`);
-                    continue;
-                }
 
-                // Block write commands during audit
-                if (intent.isAudit && rawCommand && isWriteCommand(rawCommand)) {
-                    logger.warn('[loop] AUDIT GUARD blocked write command during audit', { rawCommand });
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: `BLOCKED BY AUDIT GUARD: Write command blocked. You are in read-only audit mode. Add this to your recommendations — do not execute it.`,
-                    });
-                    continue;
-                }
+            // Lane 3: Check if raw SSH command needs Tier-3 approval (e.g. systemctl restart)
+            // This handles commands routed through execute_ssh_command that match LANE3_WHITELIST.
+            {
+                const rawCmd = toolArgs.command as string | undefined;
+                if (rawCmd) {
+                    const approvalReason = requiresApproval(rawCmd);
+                    if (approvalReason) {
+                        const targetHost = getTargetHostDisplay(toolArgs);
+                        const encodedCommand = encodeToolApprovalCommand(toolName, encodeApprovalArgs({
+                            ...toolArgs,
+                            command: rawCmd,
+                        }));
+                        await upsertSession({
+                            id: message.sessionId,
+                            channel: message.channel,
+                            user_id: message.userId,
+                            reply_target: message.replyTarget ?? session?.reply_target ?? null,
+                            messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+                            receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
+                            iteration,
+                            expectedVersion: sessionVersion,
+                        });
+                        const saved = await createApproval({
+                            session_id: message.sessionId,
+                            command: encodedCommand,
+                            target_host: targetHost,
+                            rationale: approvalReason,
+                            tool_call_id: toolCall.id,
+                        });
 
-                // Check if it needs Tier-3 approval
-                const approvalReason = requiresApproval(rawCommand);
-                if (approvalReason) {
-                    const targetHost = getTargetHostDisplay(toolArgs);
-                    // Encode as TOOL: format so resume.ts can decode it later
-                    const encodedCommand = encodeToolApprovalCommand(toolName, encodeApprovalArgs({
-                        ...toolArgs,
-                        command: rawCommand,
-                    }));
-                    // Ensure session exists in DB before creating approval (FK constraint)
-                    await upsertSession({
-                        id: message.sessionId,
-                        channel: message.channel,
-                        user_id: message.userId,
-                        reply_target: message.replyTarget ?? session?.reply_target ?? null,
-                        messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                        receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
-                        iteration,
-                        expectedVersion: sessionVersion,
-                    });
-                    const saved = await createApproval({
-                        session_id: message.sessionId,
-                        command: encodedCommand,
-                        target_host: targetHost,
-                        rationale: approvalReason,
-                        tool_call_id: toolCall.id,
-                    });
+                        await onApproval({
+                            approvalId: saved.id,
+                            command: encodedCommand,
+                            targetHost,
+                            rationale: approvalReason,
+                        });
 
-                    await onApproval({
-                        approvalId: saved.id,
-                        command: encodedCommand,
-                        targetHost,
-                        rationale: approvalReason,
-                    });
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            content: `Approval requested (ID: ${saved.id}). Command execution is paused until the user approves or rejects.`,
+                        });
 
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: `Approval requested (ID: ${saved.id}). Command execution is paused until the user approves or rejects.`,
-                    });
+                        await indicator?.update("⏳ Awaiting Pilot approval...");
+                        await indicator?.stop(true);
 
-                    await indicator?.update("⏳ Awaiting Pilot approval...");
-                    await indicator?.stop(true);
-
-                    // FIX BUG (tool id not found): Satisfy any remaining tool calls in this batch
-                    // before pausing, otherwise the LLM API throws 400 on resume.
-                    for (const remaining of choice.message.tool_calls) {
-                        if (remaining.id !== toolCall.id && !messages.some(m => m.role === 'tool' && 'tool_call_id' in m && m.tool_call_id === remaining.id)) {
-                            messages.push({
-                                role: 'tool',
-                                tool_call_id: remaining.id,
-                                content: `Cancelled: Execution paused because '${toolName}' requires human approval.`,
-                            });
+                        // Satisfy any remaining tool calls in this batch
+                        for (const remaining of choice.message.tool_calls) {
+                            if (remaining.id !== toolCall.id && !messages.some(m => m.role === 'tool' && 'tool_call_id' in m && m.tool_call_id === remaining.id)) {
+                                messages.push({
+                                    role: 'tool',
+                                    tool_call_id: remaining.id,
+                                    content: `Cancelled: Execution paused because '${toolName}' requires human approval.`,
+                                });
+                            }
                         }
-                    }
 
-                    await upsertSession({
-                        id: message.sessionId,
-                        channel: message.channel,
-                        user_id: message.userId,
-                        reply_target: message.replyTarget ?? session?.reply_target ?? null,
-                        messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
-                        receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
-                        iteration,
-                        expectedVersion: sessionVersion,
-                    });
-                    return;
+                        await upsertSession({
+                            id: message.sessionId,
+                            channel: message.channel,
+                            user_id: message.userId,
+                            reply_target: message.replyTarget ?? session?.reply_target ?? null,
+                            messages: stripEphemeralMessages(messages) as unknown as Array<Record<string, unknown>>,
+                            receipts: serializeWithSuppressedTools(executionReceipts, suppressedTools),
+                            iteration,
+                            expectedVersion: sessionVersion,
+                        });
+                        return;
+                    }
                 }
             }
+
 
             // FIX BUG 4: Wrap tool execution in try/catch so a thrown error
             // doesn't leak out of the loop without persisting the session.
