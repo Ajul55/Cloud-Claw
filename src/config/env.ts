@@ -10,6 +10,7 @@ const EnvSchema = z.object({
     LLM_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).default('openai'),
     // HIGH-9: Optional fallback provider activated by circuit breaker after 3 failures
     LLM_FALLBACK_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).optional(),
+    LLM_FALLBACK_MODEL: z.string().optional(),
 
     // Additional API keys for switching
     ANTHROPIC_API_KEY: z.string().optional(),

@@ -643,7 +643,7 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             logger.info('[loop] Outgoing messages to API', { from: messages.length, to: trimmedMessages.length });
 
-            const LLM_TIMEOUT_MS = 60_000;
+            const LLM_TIMEOUT_MS = 120_000;
 
             // Helper: race the LLM call against a hard 60-second timeout.
             // On timeout the abort signal fires; if the SDK propagates AbortError we
@@ -725,6 +725,14 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 logger.error('[loop] Failed generation', undefined, { failedGeneration: err.failed_generation });
             }
             await indicator?.stop();
+            if (msg.includes('timed out')) {
+                const { sendOpsAlert } = await import('../telemetry/ops_alerts.js');
+                void sendOpsAlert(
+                    'LLM Timeout',
+                    `Session ${message.sessionId} timed out after 120s. Provider: ${activeModel}.`,
+                    'warning'
+                );
+            }
             await onReply(`❌ LLM error: ${msg}`);
             break;
         }

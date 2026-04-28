@@ -56,7 +56,7 @@ export function getLLMClient(): LLMConfig {
 
     let apiKey = env.LLM_API_KEY;
     let baseURL = env.LLM_BASE_URL;
-    let model = globalModelOverride || env.LLM_MODEL;
+    let model = globalModelOverride || (isFallback ? env.LLM_FALLBACK_MODEL || env.LLM_MODEL : env.LLM_MODEL);
 
     if (provider === 'groq') {
         apiKey = env.GROQ_API_KEY || apiKey;

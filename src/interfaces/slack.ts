@@ -165,8 +165,8 @@ export function createSlackApp(): SlackAppInstance {
                 const controller = new AbortController();
                 const loopTimeout = setTimeout(() => {
                     controller.abort();
-                    logger.warn('[Slack] Session hard-aborted after 3 minutes', { sessionId });
-                }, 3 * 60 * 1000);
+                    logger.warn('[Slack] Session hard-aborted after 10 minutes', { sessionId });
+                }, 10 * 60 * 1000);
 
                 const runLoop = () => runAgentLoop(
                     { sessionId, channel: cloudstickUser ? 'cloudstick' : 'slack', userId: user, text: loopText, replyTarget: channel, signal: controller.signal },
