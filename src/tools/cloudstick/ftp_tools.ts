@@ -22,19 +22,21 @@ export const createFtpAccountTool: Tool = {
     parameters: {
         type: 'object',
         properties: {
+            website_id: { type: 'string', description: 'Cloudstick website ID' },
             server_id: { type: 'string', description: 'Cloudstick server ID' },
             server_label: { type: 'string', description: 'Human-readable server label' },
             ftp_username: { type: 'string', description: 'FTP username' },
             ftp_password: { type: 'string', description: 'FTP password' },
             directory: { type: 'string', description: 'Directory path the FTP user is restricted to' },
         },
-        required: ['server_id', 'ftp_username', 'ftp_password', 'directory'],
+        required: ['website_id', 'server_id', 'ftp_username', 'ftp_password', 'directory'],
     },
     approvalTier: 3,
     getRationale: (args) =>
         `This will create FTP account "${args.ftp_username}" restricted to ${args.directory} on server ${args.server_label ?? args.server_id}.`,
     getApprovalRequest: (args) => ({
         command: encodeToolApprovalCommand('create_ftp_account', {
+            website_id: String(args.website_id),
             server_id: String(args.server_id),
             ftp_username: String(args.ftp_username),
             directory: String(args.directory),
@@ -46,7 +48,7 @@ export const createFtpAccountTool: Tool = {
         try {
             const client = getCloudstickClient();
             const result = await client.createFtpAccount(
-                String(args.server_id), userId(),
+                String(args.website_id), String(args.server_id), userId(),
                 {
                     ftp_username: String(args.ftp_username),
                     ftp_password: String(args.ftp_password),

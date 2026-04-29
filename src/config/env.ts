@@ -22,7 +22,7 @@ const EnvSchema = z.object({
     CLOUDFLARE_DOMAIN: z.string().optional(),
 
     // Cloudstick API Config
-    CLOUDSTICK_API_BASE: z.string().url().default('https://api.cloudstick.io'),
+    CLOUDSTICK_API_BASE: z.string().url().optional(),
     // WebSocket base URL — set when WS runs on a different host/port than the REST API
     // (e.g. ws://192.46.211.196:8080). Falls back to CLOUDSTICK_API_BASE with protocol swap.
     CLOUDSTICK_WS_BASE: z.string().optional(),

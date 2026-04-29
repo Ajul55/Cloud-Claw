@@ -7,15 +7,15 @@
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | **Auth: switch from APIKey/APISecret to JWT Bearer token** — implement login flow (`POST /users/login/`), token storage, and auto-refresh (`POST /users/refresh-token/`) | ⬜ Todo |
-| 1.2 | **Base URL: remove hardcoded `https://api.cloudstick.io` default** — make `CLOUDSTICK_API_BASE` required (no silent fallback) in `env.ts` and `cloudstick_client.ts` | ⬜ Todo |
-| 1.3 | **Fix reversed "details" URL patterns** (6 methods) — `getLaravelDetails`, `getProxyAppDetails`, `getWooCommerceDetails`, `getPrestashopDetails`, `getPhpMyAdminDetails`, `getMediaWikiDetails` | ⬜ Todo |
-| 1.4 | **Fix FTP scope** — `/ftp/servers/:sid/` → `/ftp/websites/:wid/servers/:sid/` | ⬜ Todo |
-| 1.5 | **Fix website cron prefix** — `/cronjobs/websites/` → `/cron/websites/` | ⬜ Todo |
-| 1.6 | **Fix PHP CLI path** — `/php/cli-version/servers/` → `/phpcli/servers/` | ⬜ Todo |
-| 1.7 | **Fix auto-update path + method** — `POST /autoupdate/` → `PATCH /update/packages/servers/` | ⬜ Todo |
-| 1.8 | **Fix cleanup method** — `POST /cleanup/` → `PATCH /cleanup/` | ⬜ Todo |
-| 1.9 | **Fix permissions paths** — `/permissions` → `/permissions/users/:uid`, `/permissions/roles` → `/permissions/roles/users/:uid` | ⬜ Todo |
+| 1.1 | **Auth: switch from APIKey/APISecret to JWT Bearer token** — implement login flow (`POST /users/login/`), token storage, and auto-refresh (`POST /users/refresh-token/`) | ✅ Done |
+| 1.2 | **Base URL: remove hardcoded `https://api.cloudstick.io` default** — make `CLOUDSTICK_API_BASE` required (no silent fallback) in `env.ts` and `cloudstick_client.ts` | ✅ Done |
+| 1.3 | **Fix reversed "details" URL patterns** (6 methods) — `getLaravelDetails`, `getProxyAppDetails`, `getWooCommerceDetails`, `getPrestashopDetails`, `getPhpMyAdminDetails`, `getMediaWikiDetails` | ✅ Done |
+| 1.4 | **Fix FTP scope** — `/ftp/servers/:sid/` → `/ftp/websites/:wid/servers/:sid/` | ✅ Done |
+| 1.5 | **Fix website cron prefix** — `/cronjobs/websites/` → `/cron/websites/` | ✅ Done |
+| 1.6 | **Fix PHP CLI path** — `/php/cli-version/servers/` → `/phpcli/servers/` | ✅ Done |
+| 1.7 | **Fix auto-update path + method** — `POST /autoupdate/` → `PATCH /update/packages/servers/` | ✅ Done |
+| 1.8 | **Fix cleanup method** — `POST /cleanup/` → `PATCH /cleanup/` | ✅ Done |
+| 1.9 | **Fix permissions paths** — `/permissions` → `/permissions/users/:uid`, `/permissions/roles` → `/permissions/roles/users/:uid` | ✅ Done |
 
 ---
 

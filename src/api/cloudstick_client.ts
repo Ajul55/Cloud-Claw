@@ -2,6 +2,7 @@ import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse 
 import { env } from '../config/env.js';
 import { getCloudstickUser } from './cloudstick_context.js';
 import { getDecryptedCloudstickCredentials } from '../services/user_service.js';
+import { CloudstickTokenManager } from './cloudstick_token_manager.js';
 
 const SENSITIVE_KEYS = /^(authorization|apikey|apisecret|password|token|secret|key)$/i;
 
@@ -38,16 +39,23 @@ export class CloudstickApiClient {
     private client: AxiosInstance;
     private apiKey: string;
     private apiSecret: string;
+    private readonly baseURL: string;
+    private readonly tokenManager: CloudstickTokenManager;
 
     /**
      * @param options.apiKey     - Cloudstick API key (falls back to env)
      * @param options.apiSecret  - Cloudstick API secret (falls back to env)
-     * @param options.baseURL    - API base URL (falls back to env CLOUDSTICK_API_BASE)
+     * @param options.baseURL    - API base URL (falls back to env CLOUDSTICK_API_BASE, required)
      */
     constructor(options: CloudstickClientOptions = {}) {
-        const baseURL = options.baseURL ?? env.CLOUDSTICK_API_BASE ?? 'https://api.cloudstick.io';
+        const baseURL = options.baseURL ?? env.CLOUDSTICK_API_BASE;
+        if (!baseURL) {
+            throw new Error('CLOUDSTICK_API_BASE is required — set it in .env (no default URL)');
+        }
+        this.baseURL = baseURL;
         this.apiKey = options.apiKey ?? env.CLOUDSTICK_API_KEY ?? '';
         this.apiSecret = options.apiSecret ?? env.CLOUDSTICK_API_SECRET ?? '';
+        this.tokenManager = new CloudstickTokenManager(baseURL);
 
         this.client = axios.create({
             baseURL: `${baseURL}/api/v2`,
@@ -58,11 +66,11 @@ export class CloudstickApiClient {
     }
 
     /**
-     * Core request wrapper using API Key + Secret authentication.
-     * Uses instance-level credentials (from constructor or env fallback).
+     * Core request wrapper using JWT Bearer authentication.
+     * Obtains or refreshes a token via the token manager before each request.
+     * Per-user context takes priority over instance credentials.
      */
     public async request<T = any>(config: AxiosRequestConfig): Promise<T> {
-        // Per-user context takes priority; fall back to instance credentials (env)
         const ctx = getCloudstickUser();
         const ctxCreds = ctx ? getDecryptedCloudstickCredentials(ctx) : null;
         const effectiveKey = ctxCreds?.apiKey ?? this.apiKey;
@@ -72,21 +80,22 @@ export class CloudstickApiClient {
             throw new Error('Cloudstick API_KEY and API_SECRET are required (set in .env or per-user via /setup)');
         }
 
-        const authHeader = `Basic ${Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64')}`;
+        const token = await this.tokenManager.getToken(effectiveKey, effectiveSecret);
 
         try {
             const response: AxiosResponse<T> = await this.client.request({
                 ...config,
                 headers: {
                     ...config.headers,
-                    'APIKey': effectiveKey,
-                    'APISecret': effectiveSecret,
-                    'Authorization': authHeader,
+                    'Authorization': `Bearer ${token}`,
                 }
             });
             return response.data;
         } catch (error: any) {
             if (error.response) {
+                if (error.response.status === 401) {
+                    this.tokenManager.evict(effectiveKey);
+                }
                 const safeData = sanitizeErrorData(error.response.data);
                 const safeUrl = safeLogUrl(config.url);
                 console.error(
@@ -533,6 +542,20 @@ export class CloudstickApiClient {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 9. Permissions
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get user permissions */
+    public async getPermissions(userId: string) {
+        return this.request({ method: 'GET', url: `/permissions/users/${userId}` });
+    }
+
+    /** Get permission roles for a user */
+    public async getPermissionRoles(userId: string) {
+        return this.request({ method: 'GET', url: `/permissions/roles/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Legacy stubs — no v2 docs provided yet.
     // TODO: Replace once backend team confirms v2 paths.
     // ═══════════════════════════════════════════════════════════════════════════
@@ -562,15 +585,15 @@ export class CloudstickApiClient {
         return this.request({ method: 'DELETE', url: `/appdatabase/${dbId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
-    // > Cron Jobs (legacy)
+    // > Cron Jobs (website-level)
     public async listCronJobs(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/cron/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
     public async createCronJob(websiteId: string, serverId: string, userId: string, data: { command: string; schedule: string }) {
-        return this.request({ method: 'POST', url: `/cronjobs/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
+        return this.request({ method: 'POST', url: `/cron/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
     public async deleteCronJob(cronId: string, websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/cronjobs/${cronId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'DELETE', url: `/cron/${cronId}/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     // > SSL Status (legacy — no v2 equivalent provided)
@@ -1065,7 +1088,7 @@ export class CloudstickApiClient {
 
     /** Get Laravel details */
     public async getLaravelDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/laravel/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/laravel/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** View Laravel .env file */
@@ -1080,12 +1103,12 @@ export class CloudstickApiClient {
 
     /** Get ProxyApp details */
     public async getProxyAppDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/proxyapp/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/proxyapp/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Get WooCommerce details */
     public async getWooCommerceDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/woocommerce/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/woocommerce/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Get Joomla details */
@@ -1100,12 +1123,12 @@ export class CloudstickApiClient {
 
     /** Get Prestashop details */
     public async getPrestashopDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/prestashop/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/prestashop/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Get PHPMyAdmin details */
     public async getPhpMyAdminDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/phpmyadmin/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/phpmyadmin/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Get Roundcube Webmail details */
@@ -1115,7 +1138,7 @@ export class CloudstickApiClient {
 
     /** Get MediaWiki details */
     public async getMediaWikiDetails(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/details/mediawiki/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/mediawiki/details/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1148,9 +1171,8 @@ export class CloudstickApiClient {
     }
 
     /** Change PHP CLI version */
-    // TODO: confirm Cloudstick endpoint
     public async changePhpCliVersion(serverId: string, userId: string, data: { php_version: string }) {
-        return this.request({ method: 'PATCH', url: `/php/cli-version/servers/${serverId}/users/${userId}`, data });
+        return this.request({ method: 'PATCH', url: `/phpcli/servers/${serverId}/users/${userId}`, data });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1163,9 +1185,8 @@ export class CloudstickApiClient {
     }
 
     /** Run server cleanup */
-    // TODO: confirm Cloudstick endpoint
     public async cleanupServer(serverId: string, userId: string, data: { target: string; log_retention_period?: string }) {
-        return this.request({ method: 'POST', url: `/cleanup/servers/${serverId}/users/${userId}`, data });
+        return this.request({ method: 'PATCH', url: `/cleanup/servers/${serverId}/users/${userId}`, data });
     }
 
     /** Get server hostname (confirmed: GET /hostname/servers/{s}/users/{u}) */
@@ -1179,9 +1200,8 @@ export class CloudstickApiClient {
     }
 
     /** Run auto-update */
-    // TODO: confirm Cloudstick endpoint
     public async runAutoUpdate(serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/autoupdate/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'PATCH', url: `/update/packages/servers/${serverId}/users/${userId}` });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1209,9 +1229,8 @@ export class CloudstickApiClient {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /** Create FTP account */
-    // TODO: confirm Cloudstick endpoint
-    public async createFtpAccount(serverId: string, userId: string, data: { ftp_username: string; ftp_password: string; directory: string }) {
-        return this.request({ method: 'POST', url: `/ftp/servers/${serverId}/users/${userId}`, data });
+    public async createFtpAccount(websiteId: string, serverId: string, userId: string, data: { ftp_username: string; ftp_password: string; directory: string }) {
+        return this.request({ method: 'POST', url: `/ftp/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
 }
 
