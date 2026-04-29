@@ -44,7 +44,7 @@ interface HallucinationPattern {
     /** If true, only a WRITE receipt can justify this claim */
     requiresWriteReceipt?: boolean;
     /** If set, only receipts for these specific tools satisfy it (READ or WRITE) */
-    requiresTool?: string;
+    requiresTool?: string | string[];
 }
 
 export function checkForHallucination(
@@ -54,8 +54,11 @@ export function checkForHallucination(
     currentHost?: string
 ): boolean {
     const hallucinationPatterns: HallucinationPattern[] = [
-        // ─── Service state claims — require a WRITE receipt ──────────────
-        { pattern: /(nginx|mariadb|mysql|apache|php|redis|postgres) is (now |currently )?(active|running|up|fixed|resolved)/i, requiresWriteReceipt: true },
+        // ─── Service state claims ──────────────
+        // State changes (fixes) require a WRITE receipt
+        { pattern: /(nginx|mariadb|mysql|apache|php|redis|postgres) is (now |currently )?(fixed|resolved)/i, requiresWriteReceipt: true },
+        // Status checks only require a READ receipt
+        { pattern: /(nginx|mariadb|mysql|apache|php|redis|postgres) is (now |currently )?(active|running|up)/i, requiresTool: ['diagnose_nginx', 'diagnose_services', 'execute_ssh_command', 'get_mysql_status', 'check_ssl_api'] },
         { pattern: /fix (was|has been) applied/i, requiresWriteReceipt: true },
         { pattern: /configuration (has been|was) (successfully |)repaired/i, requiresWriteReceipt: true },
         { pattern: /(service|nginx|mariadb|mysql) has been restarted/i, requiresWriteReceipt: true },
@@ -106,7 +109,7 @@ export function checkForHallucination(
         }
 
         if (req) {
-            return !hasReceipt(executionReceipts, [req], true, freshnessMs);
+            return !hasReceipt(executionReceipts, req, true, freshnessMs);
         }
 
         return true; // planning language or SSH key claims — always flag

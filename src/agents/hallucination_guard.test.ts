@@ -31,14 +31,20 @@ describe('Hallucination Guard', () => {
 
     it('blocks fix claims when only a READ receipt exists (diagnose_nginx)', () => {
         const receipts = new Map<string, ToolReceipt>();
-        // diagnose_nginx is READ-only — should NOT satisfy "is now active/running" claims
+        // diagnose_nginx is READ-only — should NOT satisfy "is now fixed" claims
         receipts.set('diagnose_nginx', { toolName: 'diagnose_nginx', success: true, host: 'all', timestamp: Date.now(), outputHash: 'test' });
-        expect(checkForHallucination('nginx is now active', receipts, 1000)).toBe(true);
+        expect(checkForHallucination('nginx is now fixed', receipts, 1000)).toBe(true);
     });
 
-    it('allows "is now active" when a WRITE receipt exists', () => {
+    it('allows "is now fixed" when a WRITE receipt exists', () => {
         const receipts = new Map<string, ToolReceipt>();
         receipts.set('execute_ssh_write', { toolName: 'execute_ssh_write', success: true, host: 'all', timestamp: Date.now(), outputHash: 'test' });
+        expect(checkForHallucination('nginx is now fixed', receipts, 1000)).toBe(false);
+    });
+
+    it('allows "is now active" when a valid READ receipt exists', () => {
+        const receipts = new Map<string, ToolReceipt>();
+        receipts.set('diagnose_nginx', { toolName: 'diagnose_nginx', success: true, host: 'all', timestamp: Date.now(), outputHash: 'test' });
         expect(checkForHallucination('nginx is now active', receipts, 1000)).toBe(false);
     });
 
