@@ -52,3 +52,4 @@ keys/
 data/
 session_*.json
 last_session.txt
+apidocs.html
