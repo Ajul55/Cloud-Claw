@@ -1275,6 +1275,164 @@ export class CloudstickApiClient {
     public async createFtpAccount(websiteId: string, serverId: string, userId: string, data: { ftp_username: string; ftp_password: string; directory: string }) {
         return this.request({ method: 'POST', url: `/ftp/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.4 — Hostname SSL
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Issue free (Let's Encrypt) SSL for server hostname */
+    public async issueHostnameSSL(serverId: string, userId: string, data: { authorisation: string; access: string; brotli_enabled?: boolean }) {
+        return this.request({ method: 'POST', url: `/ssl/free-certificate/hostname/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Install custom SSL certificate on server hostname */
+    public async installHostnameCustomSSL(serverId: string, userId: string, data: { certificate: string; private_key: string; ca_bundle?: string }) {
+        return this.request({ method: 'POST', url: `/ssl/custom-certificate/hostname/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Renew free SSL certificate on server hostname */
+    public async renewHostnameSSL(serverId: string, userId: string) {
+        return this.request({ method: 'POST', url: `/ssl/free-certificate/renew/hostname/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Remove SSL certificate from server hostname */
+    public async removeHostnameSSL(serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/ssl/remove-certificate/hostname/servers/${serverId}/users/${userId}` });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.5 — PHP Version Management (global, per user)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List available PHP versions for a user */
+    public async listPhpVersions(userId: string) {
+        return this.request({ method: 'GET', url: `/php-version/users/${userId}` });
+    }
+
+    /** Add (register) a PHP version for a user */
+    public async addPhpVersion(userId: string, data: { php_version: string }) {
+        return this.request({ method: 'POST', url: `/php-version/users/${userId}`, data });
+    }
+
+    /** Remove a PHP version for a user */
+    public async removePhpVersion(userId: string, phpVersion: string) {
+        return this.request({ method: 'DELETE', url: `/php-version/${encodeURIComponent(phpVersion)}/users/${userId}` });
+    }
+
+    /** Install a PHP version on a specific server */
+    public async installPhpVersionOnServer(serverId: string, userId: string, data: { php_version: string }) {
+        return this.request({ method: 'POST', url: `/php-version/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.6 — PHP Extensions (global, per user)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List global PHP extensions for a user */
+    public async listPhpExtensions(userId: string) {
+        return this.request({ method: 'GET', url: `/php-extension/users/${userId}` });
+    }
+
+    /** Add a global PHP extension for a user */
+    public async addPhpExtension(userId: string, data: { php_version: string; extension: string }) {
+        return this.request({ method: 'POST', url: `/php-extension/users/${userId}`, data });
+    }
+
+    /** Remove a global PHP extension for a user */
+    public async deletePhpExtension(userId: string, data: { php_version: string; extension: string }) {
+        return this.request({ method: 'DELETE', url: `/php-extension/users/${userId}`, data });
+    }
+
+    /** Toggle global PHP extension status (enable / disable) */
+    public async togglePhpExtension(userId: string, data: { php_version: string; extension: string; status: boolean }) {
+        return this.request({ method: 'PATCH', url: `/php-extension/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.7 — CSF: Country Block Lists
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get CSF country block list for a server */
+    public async getCsfCountries(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/csf/countries/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Add countries to CSF block list */
+    public async addCsfCountries(serverId: string, userId: string, data: { countries: string[]; direction?: 'in' | 'out' | 'both' }) {
+        return this.request({ method: 'POST', url: `/csf/countries/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.8 — CSF: IP Lists
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List IPs in a CSF list (whitelist | blacklist | ignorelist | denylist) */
+    public async listCsfIps(listType: 'whitelist' | 'blacklist' | 'ignorelist' | 'denylist', serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/csf/${listType}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Add an IP to a CSF list */
+    public async addCsfIp(listType: 'whitelist' | 'blacklist' | 'ignorelist' | 'denylist', serverId: string, userId: string, data: { ip: string; comment?: string }) {
+        return this.request({ method: 'POST', url: `/csf/${listType}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Remove an IP from a CSF list */
+    public async removeCsfIp(listType: 'whitelist' | 'blacklist' | 'ignorelist' | 'denylist', serverId: string, userId: string, data: { ip: string }) {
+        return this.request({ method: 'DELETE', url: `/csf/${listType}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Temporarily allow an IP through CSF */
+    public async tempAllowCsfIp(serverId: string, userId: string, data: { ip: string; timeout: number; comment?: string }) {
+        return this.request({ method: 'POST', url: `/csf/temp-allow/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Temporarily deny/block an IP in CSF */
+    public async tempDenyCsfIp(serverId: string, userId: string, data: { ip: string; timeout: number; comment?: string }) {
+        return this.request({ method: 'POST', url: `/csf/temp-deny/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Temporarily drop an IP in CSF */
+    public async tempDropCsfIp(serverId: string, userId: string, data: { ip: string; timeout: number; comment?: string }) {
+        return this.request({ method: 'POST', url: `/csf/temp-drop/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.9 — CSF: Input/Output Ports
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List allowed CSF ports (direction: 'in' | 'out') */
+    public async listCsfPorts(direction: 'in' | 'out', serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/csf/ports/${direction}/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Add a port to CSF allow list */
+    public async addCsfPort(direction: 'in' | 'out', serverId: string, userId: string, data: { port: number | string; protocol?: 'tcp' | 'udp'; comment?: string }) {
+        return this.request({ method: 'POST', url: `/csf/ports/${direction}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Remove a port from CSF allow list */
+    public async removeCsfPort(direction: 'in' | 'out', serverId: string, userId: string, data: { port: number | string; protocol?: 'tcp' | 'udp' }) {
+        return this.request({ method: 'DELETE', url: `/csf/ports/${direction}/servers/${serverId}/users/${userId}`, data });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 3.10 — Agent Version
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get available agent versions */
+    public async getAgentVersions(userId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/agent_version` });
+    }
+
+    /** Create/register an agent version */
+    public async createAgentVersion(userId: string, data: { version: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/users/${userId}/agent_version`, data });
+    }
+
+    /** Update (upgrade) agent version on a server */
+    public async updateAgentVersionOnServer(serverId: string, userId: string, data?: { version?: string }) {
+        return this.request({ method: 'PATCH', url: `/servers/${serverId}/users/${userId}/update_agent_version`, data });
+    }
 }
 
 // Export lazy singleton — only instantiated on first use, not at import time.

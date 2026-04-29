@@ -45,13 +45,13 @@
 | 3.1 | **SSH vault** — `GET/POST /sshvault/users/:uid` + `DELETE /sshvault/:key/users/:uid` | ⬜ Todo |
 | 3.2 | **SSH keys on server** — `GET/POST /servers/:sid/users/:uid/sshkey` + `DELETE /sshkey/:key` | ⬜ Todo |
 | 3.3 | **SSH config** — `GET/POST /sshconfig/servers/:sid/users/:uid` | ⬜ Todo |
-| 3.4 | **Hostname SSL** — full cert management on server hostname (free + custom, renew, remove) | ⬜ Todo |
-| 3.5 | **PHP version management (global)** — list/add/remove PHP versions per user + install on server | ⬜ Todo |
-| 3.6 | **PHP extensions (global)** — `GET/POST/DELETE /php-extension/users/:uid` + status toggle | ⬜ Todo |
-| 3.7 | **CSF: country block lists** — `GET/POST /csf/countries/servers/:sid/users/:uid` | ⬜ Todo |
-| 3.8 | **CSF: IP lists** — whitelist, blacklist, ignorelist, deny IPs, temp allow/deny/drop | ⬜ Todo |
-| 3.9 | **CSF: input/output ports** — manage allowed ports | ⬜ Todo |
-| 3.10 | **Agent version** — `GET/POST /users/:uid/agent_version` + `PATCH /servers/:sid/users/:uid/update_agent_version` | ⬜ Todo |
+| 3.4 | **Hostname SSL** — full cert management on server hostname (free + custom, renew, remove) | ✅ Done |
+| 3.5 | **PHP version management (global)** — list/add/remove PHP versions per user + install on server | ✅ Done |
+| 3.6 | **PHP extensions (global)** — `GET/POST/DELETE /php-extension/users/:uid` + status toggle | ✅ Done |
+| 3.7 | **CSF: country block lists** — `GET/POST /csf/countries/servers/:sid/users/:uid` | ✅ Done |
+| 3.8 | **CSF: IP lists** — whitelist, blacklist, ignorelist, deny IPs, temp allow/deny/drop | ✅ Done |
+| 3.9 | **CSF: input/output ports** — manage allowed ports | ✅ Done |
+| 3.10 | **Agent version** — `GET/POST /users/:uid/agent_version` + `PATCH /servers/:sid/users/:uid/update_agent_version` | ✅ Done |
 
 ---
 
