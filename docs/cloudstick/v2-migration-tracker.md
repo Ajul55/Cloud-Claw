@@ -113,12 +113,12 @@
 
 | # | Task | Status |
 |---|------|--------|
-| 8.1 | **WP templates** — list themes/plugins, create/list/update/delete templates | ⬜ Todo |
-| 8.2 | **WP subdomain management** — `POST /wordpress/subdomain/websites/` + delete | ⬜ Todo |
-| 8.3 | **CustomPHP: clone + subdomain** — `POST /customphp/clone/` + subdomain CRUD | ⬜ Todo |
-| 8.4 | **ProxyApp subdomain** — `POST/DELETE /proxyapp/subdomain/websites/` | ⬜ Todo |
-| 8.5 | **WhiteLabel app** — full CRUD `GET/POST /whitelabel/servers/` + details + delete | ⬜ Todo |
-| 8.6 | **phpMyAdmin DB login** — `POST /phpmyadmin/database/login/` + app-level login | ⬜ Todo |
+| 8.1 | **WP templates** — list themes/plugins, create/list/update/delete templates | ✅ Done |
+| 8.2 | **WP subdomain management** — `POST /wordpress/subdomain/websites/` + delete | ✅ Done |
+| 8.3 | **CustomPHP: clone + subdomain** — `POST /customphp/clone/` + subdomain CRUD | ✅ Done |
+| 8.4 | **ProxyApp subdomain** — `POST/DELETE /proxyapp/subdomain/websites/` | ✅ Done |
+| 8.5 | **WhiteLabel app** — full CRUD `GET/POST /whitelabel/servers/` + details + delete | ✅ Done |
+| 8.6 | **phpMyAdmin DB login** — `POST /phpmyadmin/database/login/` + app-level login | ✅ Done |
 
 ---
 

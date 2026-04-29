@@ -1543,6 +1543,85 @@ export class CloudstickApiClient {
     public async getDatabaseBackupFiles(databaseId: string, userId: string) {
         return this.request({ method: 'GET', url: `/backup/files/databases/${databaseId}/users/${userId}` });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 8 — WordPress Templates & Advanced App Features
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // 8.1 — WP Templates
+    public async listWpAvailableThemes(userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/themes/users/${userId}` });
+    }
+    public async listWpAvailablePlugins(userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/plugins/users/${userId}` });
+    }
+    public async listWpTemplates(userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/templates/users/${userId}` });
+    }
+    public async createWpTemplate(userId: string, data: { name: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/wordpress/templates/users/${userId}`, data });
+    }
+    public async updateWpTemplate(userId: string, templateId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'PATCH', url: `/wordpress/templates/${templateId}/users/${userId}`, data });
+    }
+    public async deleteWpTemplate(userId: string, templateId: string) {
+        return this.request({ method: 'DELETE', url: `/wordpress/templates/${templateId}/users/${userId}` });
+    }
+
+    // 8.2 — WP Subdomain Management
+    public async createWpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/wordpress/subdomain/websites/`, data });
+    }
+    public async deleteWpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'DELETE', url: `/wordpress/subdomain/websites/`, data });
+    }
+
+    // 8.3 — CustomPHP Clone + Subdomain
+    public async cloneCustomPhp(data: { website_id: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/customphp/clone/`, data });
+    }
+    public async createCustomPhpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/customphp/subdomain/websites/`, data });
+    }
+    public async listCustomPhpSubdomains(websiteId: string) {
+        return this.request({ method: 'GET', url: `/customphp/subdomain/websites/${websiteId}/` });
+    }
+    public async deleteCustomPhpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'DELETE', url: `/customphp/subdomain/websites/`, data });
+    }
+
+    // 8.4 — ProxyApp Subdomain
+    public async createProxyAppSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/proxyapp/subdomain/websites/`, data });
+    }
+    public async deleteProxyAppSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
+        return this.request({ method: 'DELETE', url: `/proxyapp/subdomain/websites/`, data });
+    }
+
+    // 8.5 — WhiteLabel App
+    public async listWhitelabelApps(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/whitelabel/servers/${serverId}/users/${userId}` });
+    }
+    public async createWhitelabelApp(serverId: string, userId: string, data: { name: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/whitelabel/servers/${serverId}/users/${userId}`, data });
+    }
+    public async getWhitelabelAppDetails(whitelabelId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}` });
+    }
+    public async updateWhitelabelApp(whitelabelId: string, serverId: string, userId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'PATCH', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}`, data });
+    }
+    public async deleteWhitelabelApp(whitelabelId: string, serverId: string, userId: string) {
+        return this.request({ method: 'DELETE', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}` });
+    }
+
+    // 8.6 — phpMyAdmin DB Login
+    public async phpMyAdminDatabaseLogin(data: { database_id: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/phpmyadmin/database/login/`, data });
+    }
+    public async phpMyAdminAppLogin(websiteId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'POST', url: `/phpmyadmin/login/websites/${websiteId}/`, data });
+    }
 }
 
 // Export lazy singleton — only instantiated on first use, not at import time.
