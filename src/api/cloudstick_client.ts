@@ -1457,6 +1457,92 @@ export class CloudstickApiClient {
     public async exchangeGitOAuthToken(params: { code: string; provider: string; [key: string]: unknown }) {
         return this.request({ method: 'GET', url: `/exchange/token`, params });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 5 — Backup (Extended)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // 5.1 — Backup Plans CRUD
+    /** List backup plans for a user */
+    public async listBackupPlans(userId: string) {
+        return this.request({ method: 'GET', url: `/backup-plans/users/${userId}` });
+    }
+
+    /** Create a backup plan */
+    public async createBackupPlan(userId: string, data: { name: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/backup-plans/users/${userId}`, data });
+    }
+
+    /** Update a backup plan */
+    public async updateBackupPlan(userId: string, planId: string, data: Record<string, unknown>) {
+        return this.request({ method: 'PATCH', url: `/backup-plans/${planId}/users/${userId}`, data });
+    }
+
+    /** Delete a backup plan */
+    public async deleteBackupPlan(userId: string, planId: string) {
+        return this.request({ method: 'DELETE', url: `/backup-plans/${planId}/users/${userId}` });
+    }
+
+    // 5.2 — Backup Settings
+    /** Get backup settings for a user */
+    public async getBackupSettings(userId: string) {
+        return this.request({ method: 'GET', url: `/backup/settings/users/${userId}` });
+    }
+
+    /** Update backup settings (periods, retention, enable/disable, storage size) */
+    public async updateBackupSettings(userId: string, data: {
+        period?: string;
+        manual_retention?: number;
+        enabled?: boolean;
+        storage_size?: number;
+        [key: string]: unknown;
+    }) {
+        return this.request({ method: 'PATCH', url: `/backup/settings/users/${userId}`, data });
+    }
+
+    // 5.3 — Backup Plan Purchase
+    /** Purchase a backup plan */
+    public async purchaseBackupPlan(userId: string, data: { plan_id: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/backup/purchase/users/${userId}`, data });
+    }
+
+    /** Cancel a backup plan subscription */
+    public async cancelBackupPlan(userId: string, data: { plan_id: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/backup/cancel/users/${userId}`, data });
+    }
+
+    /** Upgrade a backup plan */
+    public async upgradeBackupPlan(userId: string, data: { plan_id: string; new_plan_id: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/backup/upgrade/users/${userId}`, data });
+    }
+
+    /** Verify backup plan payment */
+    public async verifyBackupPayment(userId: string, data: { payment_reference: string; [key: string]: unknown }) {
+        return this.request({ method: 'POST', url: `/backup/verify-payment/users/${userId}`, data });
+    }
+
+    // 5.4 — Backup Archive + Activity Log
+    /** List backup archive entries */
+    public async getBackupArchive(userId: string, params?: Record<string, unknown>) {
+        return this.request({ method: 'GET', url: `/backup/archive/users/${userId}`, params });
+    }
+
+    /** Get backup activity log */
+    public async getBackupActivity(userId: string, params?: Record<string, unknown>) {
+        return this.request({ method: 'GET', url: `/backup/activity/users/${userId}`, params });
+    }
+
+    // 5.5 — Website-level Backup Files
+    /** List backup files for a website */
+    public async getWebsiteBackupFiles(websiteId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/files/websites/${websiteId}/users/${userId}` });
+    }
+
+    // 5.6 — Database-level Backup Files
+    /** List backup files for a database */
+    public async getDatabaseBackupFiles(databaseId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/backup/files/databases/${databaseId}/users/${userId}` });
+    }
 }
 
 // Export lazy singleton — only instantiated on first use, not at import time.

@@ -72,12 +72,12 @@
 
 | # | Task | Status |
 |---|------|--------|
-| 5.1 | **Backup plans CRUD** — `GET/POST /backup-plans/users/:uid` + update/delete | ⬜ Todo |
-| 5.2 | **Backup settings** — periods, manual retention, enable/disable, storage size | ⬜ Todo |
-| 5.3 | **Backup plan purchase** — plan buy, cancel, upgrade, verify payment | ⬜ Todo |
-| 5.4 | **Backup archive + activity log** — `GET /backup/archive/` + `GET /backup/activity/` | ⬜ Todo |
-| 5.5 | **Website-level backup files** — `GET /backup/files/websites/:wid/users/:uid` | ⬜ Todo |
-| 5.6 | **Database-level backup files** — `GET /backup/files/databases/:dbid/users/:uid` | ⬜ Todo |
+| 5.1 | **Backup plans CRUD** — `GET/POST /backup-plans/users/:uid` + update/delete | ✅ Done |
+| 5.2 | **Backup settings** — periods, manual retention, enable/disable, storage size | ✅ Done |
+| 5.3 | **Backup plan purchase** — plan buy, cancel, upgrade, verify payment | ✅ Done |
+| 5.4 | **Backup archive + activity log** — `GET /backup/archive/` + `GET /backup/activity/` | ✅ Done |
+| 5.5 | **Website-level backup files** — `GET /backup/files/websites/:wid/users/:uid` | ✅ Done |
+| 5.6 | **Database-level backup files** — `GET /backup/files/databases/:dbid/users/:uid` | ✅ Done |
 
 ---
 
