@@ -745,17 +745,17 @@ export class CloudstickApiClient {
 
     /** Suspend a website */
     public async suspendWebsite(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/suspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'PATCH', url: `/suspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Unsuspend a website */
     public async unsuspendWebsite(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/unsuspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'PATCH', url: `/unsuspend/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Rebuild a website */
     public async rebuildWebsite(websiteId: string, serverId: string, userId: string) {
-        return this.request({ method: 'POST', url: `/rebuild/websites/${websiteId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'PATCH', url: `/rebuild/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     /** Change website stack type (e.g. nginx, apache) */
@@ -773,7 +773,7 @@ export class CloudstickApiClient {
         return this.request({ method: 'PATCH', url: `/changepublicpath/websites/${websiteId}/servers/${serverId}/users/${userId}`, data });
     }
 
-    /** Get website activity log */
+    /** Get website nginx access/error logs */
     public async getWebsiteActivityLogs(
         websiteId: string,
         serverId: string,
@@ -785,6 +785,49 @@ export class CloudstickApiClient {
             url: `/nginx-logs/websites/${websiteId}/servers/${serverId}/users/${userId}`,
             params,
         });
+    }
+
+    /** Get website nginx logs (alias for getWebsiteActivityLogs) */
+    public async getNginxLogs(websiteId: string, serverId: string, userId: string, params?: { limit?: number; offset?: number }) {
+        return this.getWebsiteActivityLogs(websiteId, serverId, userId, params);
+    }
+
+    /** Get website apache logs */
+    public async getApacheLogs(websiteId: string, serverId: string, userId: string, params?: { limit?: number; offset?: number }) {
+        return this.request({
+            method: 'GET',
+            url: `/apache-logs/websites/${websiteId}/servers/${serverId}/users/${userId}`,
+            params,
+        });
+    }
+
+    /** List all websites across all servers for a user */
+    public async listAllWebsites(userId: string, params?: { page?: number; limit?: number; search?: string }) {
+        return this.request({ method: 'GET', url: `/list/allwebsites/users/${userId}`, params });
+    }
+
+    /** List all servers (admin view) */
+    public async listAllServers(userId: string, params?: { page?: number; limit?: number; search?: string }) {
+        return this.request({ method: 'GET', url: `/listallservers/users/${userId}`, params });
+    }
+
+    /** Get service status on a server (nginx, mysql, etc.) */
+    public async getService(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/service/servers/${serverId}/users/${userId}` });
+    }
+
+    /** Start or stop a service on a server */
+    public async updateService(serverId: string, userId: string, data: { service: string; action: 'start' | 'stop' | 'restart' }) {
+        return this.request({ method: 'PATCH', url: `/service/servers/${serverId}/users/${userId}`, data });
+    }
+
+    /** Get filtered server activity log */
+    public async getFilteredServerActivity(
+        serverId: string,
+        userId: string,
+        params?: { page?: number; limit?: number; search?: string; status?: string; activity_type?: string; duration?: string }
+    ) {
+        return this.request({ method: 'GET', url: `/list-activity/filter/servers/${serverId}/users/${userId}`, params });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

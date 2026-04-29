@@ -24,16 +24,16 @@
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | **Website: suspend / unsuspend** — `PATCH /suspend/websites/` + `PATCH /unsuspend/websites/` | ⬜ Todo |
-| 2.2 | **Website: change stack** — `PATCH /changestack/websites/` (nginx ↔ apache) | ⬜ Todo |
-| 2.3 | **Website: change public path** — `PATCH /changepublicpath/websites/` | ⬜ Todo |
-| 2.4 | **Website: change PHP config** — `PATCH /changephpconfig/websites/` | ⬜ Todo |
-| 2.5 | **Website: rebuild** — `PATCH /rebuild/websites/` | ⬜ Todo |
-| 2.6 | **Website: nginx + apache logs** — `GET /nginx-logs/websites/` + `GET /apache-logs/websites/` | ⬜ Todo |
-| 2.7 | **Website: list all websites (all servers)** — `GET /list/allwebsites/users/:uid` | ⬜ Todo |
-| 2.8 | **Service management** — `GET/PATCH /service/servers/:sid/users/:uid` (start/stop nginx, mysql, etc.) | ⬜ Todo |
-| 2.9 | **Server: filtered activity log** — `GET /list-activity/filter/servers/:sid/users/:uid` | ⬜ Todo |
-| 2.10 | **Server: list all servers (admin)** — `GET /listallservers/users/:uid` | ⬜ Todo |
+| 2.1 | **Website: suspend / unsuspend** — `PATCH /suspend/websites/` + `PATCH /unsuspend/websites/` | ✅ Done |
+| 2.2 | **Website: change stack** — `PATCH /changestack/websites/` (nginx ↔ apache) | ✅ Done |
+| 2.3 | **Website: change public path** — `PATCH /changepublicpath/websites/` | ✅ Done |
+| 2.4 | **Website: change PHP config** — `PATCH /changephpconfig/websites/` | ✅ Done |
+| 2.5 | **Website: rebuild** — `PATCH /rebuild/websites/` | ✅ Done |
+| 2.6 | **Website: nginx + apache logs** — `GET /nginx-logs/websites/` + `GET /apache-logs/websites/` | ✅ Done |
+| 2.7 | **Website: list all websites (all servers)** — `GET /list/allwebsites/users/:uid` | ✅ Done |
+| 2.8 | **Service management** — `GET/PATCH /service/servers/:sid/users/:uid` (start/stop nginx, mysql, etc.) | ✅ Done |
+| 2.9 | **Server: filtered activity log** — `GET /list-activity/filter/servers/:sid/users/:uid` | ✅ Done |
+| 2.10 | **Server: list all servers (admin)** — `GET /listallservers/users/:uid` | ✅ Done |
 
 ---
 
