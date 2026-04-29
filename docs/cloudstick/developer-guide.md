@@ -2,6 +2,8 @@
 
 This document is for the **Cloudstick development team**. It covers everything your engineers need to build to connect the Cloudstick dashboard to Cloud-Claw.
 
+> **Scope:** This guide covers the **gateway API** — how Cloudstick's backend calls Cloud-Claw (chat, streaming, approvals, usage). It does not cover the Cloudstick REST API v2 that Cloud-Claw uses internally to manage servers and websites; that is documented in `v2-migration-tracker.md`.
+
 ---
 
 ## The Big Picture

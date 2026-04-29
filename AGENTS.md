@@ -4,6 +4,10 @@
 
 Cloud-Claw is a TypeScript Node.js AIOps agent. Core source lives in `src/`. The main entrypoint is `src/index.ts`; the agent loop is in `src/agents/loop.ts`; Slack, Telegram, and Cloudstick HTTP/SSE interfaces live in `src/interfaces/`. Tools are registered in `src/tools/tool_registry.ts`, with Cloudstick API tools under `src/tools/cloudstick/`. HITL approval logic is in `src/hitl/`, database access and schema are in `src/database/`, and security filters are in `src/security/`. The dashboard frontend is a separate Vite app in `dashboard/`. Tests are colocated as `*.test.ts` under `src/`.
 
+### Cloudstick API v2 Migration
+
+`src/api/cloudstick_client.ts` is migrated to the v2 API. JWT auth is handled automatically by `src/api/cloudstick_token_manager.ts` — it exchanges `CLOUDSTICK_API_KEY`/`CLOUDSTICK_API_SECRET` for a short-lived JWT, caches it, and refreshes before expiry. Phases 1–5 and Phase 8 are complete. Phases 6, 7, and 9 are pending. SSH endpoints 3.1–3.3 are explicitly deferred. See `docs/cloudstick/v2-migration-tracker.md` for full status.
+
 ## Build, Test, and Development Commands
 
 - `npm run dev` starts the TypeScript app with `tsx watch`.
@@ -13,6 +17,8 @@ Cloud-Claw is a TypeScript Node.js AIOps agent. Core source lives in `src/`. The
 - `npm run build:dashboard` builds the Vite dashboard.
 - `npm run start` builds dashboard and backend, then runs `dist/src/index.js`.
 - `npm run db:init` applies `src/database/schema.sql` to `$DATABASE_URL`.
+
+> **Note:** `tsc` is not in PATH in this environment. Always use `npx tsc --noEmit` for manual type checks.
 
 ## Coding Style & Naming Conventions
 
