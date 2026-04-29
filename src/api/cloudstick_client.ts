@@ -1433,6 +1433,30 @@ export class CloudstickApiClient {
     public async updateAgentVersionOnServer(serverId: string, userId: string, data?: { version?: string }) {
         return this.request({ method: 'PATCH', url: `/servers/${serverId}/users/${userId}/update_agent_version`, data });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Phase 4 — Git Integration
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** List git projects for a user from a specific provider (github, gitlab, bitbucket) */
+    public async listGitProjects(userId: string, provider: 'github' | 'gitlab' | 'bitbucket') {
+        return this.request({ method: 'GET', url: `/users/${userId}/projects/list/${provider}` });
+    }
+
+    /** List branches for a project from a specific provider */
+    public async listGitBranches(userId: string, provider: 'github' | 'gitlab' | 'bitbucket', projectId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/projects/${encodeURIComponent(projectId)}/branches/list/${provider}` });
+    }
+
+    /** Get the git SSH public key for a server */
+    public async getGitSshKey(userId: string, serverId: string) {
+        return this.request({ method: 'GET', url: `/users/${userId}/servers/${serverId}/git/sshkey` });
+    }
+
+    /** Exchange OAuth token for a git provider */
+    public async exchangeGitOAuthToken(params: { code: string; provider: string; [key: string]: unknown }) {
+        return this.request({ method: 'GET', url: `/exchange/token`, params });
+    }
 }
 
 // Export lazy singleton — only instantiated on first use, not at import time.

@@ -60,10 +60,10 @@
 
 | # | Task | Status |
 |---|------|--------|
-| 4.1 | **List projects** — GitLab, GitHub, Bitbucket (`GET /users/:uid/projects/list/{provider}`) | ⬜ Todo |
-| 4.2 | **List branches** — per project per provider | ⬜ Todo |
-| 4.3 | **Git SSH key per server** — `GET /users/:uid/servers/:sid/git/sshkey` | ⬜ Todo |
-| 4.4 | **OAuth token exchange** — `GET /exchange/token` | ⬜ Todo |
+| 4.1 | **List projects** — GitLab, GitHub, Bitbucket (`GET /users/:uid/projects/list/{provider}`) | ✅ Done |
+| 4.2 | **List branches** — per project per provider | ✅ Done |
+| 4.3 | **Git SSH key per server** — `GET /users/:uid/servers/:sid/git/sshkey` | ✅ Done |
+| 4.4 | **OAuth token exchange** — `GET /exchange/token` | ✅ Done |
 
 ---
 
