@@ -1550,52 +1550,49 @@ export class CloudstickApiClient {
 
     // 8.1 — WP Templates
     public async listWpAvailableThemes(userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/themes/users/${userId}` });
+        return this.request({ method: 'GET', url: `/wordpress-templates/listthemes/users/${userId}` });
     }
     public async listWpAvailablePlugins(userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/plugins/users/${userId}` });
+        return this.request({ method: 'GET', url: `/wordpress-templates/listplugins/users/${userId}` });
     }
     public async listWpTemplates(userId: string) {
-        return this.request({ method: 'GET', url: `/wordpress/templates/users/${userId}` });
+        return this.request({ method: 'GET', url: `/wordpress-templates/listtemplates/users/${userId}` });
     }
     public async createWpTemplate(userId: string, data: { name: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/wordpress/templates/users/${userId}`, data });
+        return this.request({ method: 'POST', url: `/wordpress-templates/createtemplates/users/${userId}`, data });
     }
     public async updateWpTemplate(userId: string, templateId: string, data: Record<string, unknown>) {
-        return this.request({ method: 'PATCH', url: `/wordpress/templates/${templateId}/users/${userId}`, data });
+        return this.request({ method: 'PATCH', url: `/wordpress-templates/template/${templateId}/users/${userId}`, data });
     }
     public async deleteWpTemplate(userId: string, templateId: string) {
-        return this.request({ method: 'DELETE', url: `/wordpress/templates/${templateId}/users/${userId}` });
+        return this.request({ method: 'DELETE', url: `/wordpress-templates/template/${templateId}/users/${userId}` });
     }
 
     // 8.2 — WP Subdomain Management
-    public async createWpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/wordpress/subdomain/websites/`, data });
+    public async createWpSubdomain(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-    public async deleteWpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'DELETE', url: `/wordpress/subdomain/websites/`, data });
+    public async deleteWpSubdomain(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/wordpress/subdomain/delete/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     // 8.3 — CustomPHP Clone + Subdomain
-    public async cloneCustomPhp(data: { website_id: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/customphp/clone/`, data });
+    public async cloneCustomPhp(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/customphp/clone/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-    public async createCustomPhpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/customphp/subdomain/websites/`, data });
+    public async listCustomPhpSubdomains(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/customphp/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-    public async listCustomPhpSubdomains(websiteId: string) {
-        return this.request({ method: 'GET', url: `/customphp/subdomain/websites/${websiteId}/` });
-    }
-    public async deleteCustomPhpSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'DELETE', url: `/customphp/subdomain/websites/`, data });
+    public async deleteCustomPhpSubdomain(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/customphp/subdomain/delete/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     // 8.4 — ProxyApp Subdomain
-    public async createProxyAppSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/proxyapp/subdomain/websites/`, data });
+    public async listProxyAppSubdomains(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/proxyapp/subdomain/websites/${websiteId}/servers/${serverId}/users/${userId}` });
     }
-    public async deleteProxyAppSubdomain(data: { website_id: string; subdomain: string; [key: string]: unknown }) {
-        return this.request({ method: 'DELETE', url: `/proxyapp/subdomain/websites/`, data });
+    public async deleteProxyAppSubdomain(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/proxyapp/subdomain/delete/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 
     // 8.5 — WhiteLabel App
@@ -1606,21 +1603,18 @@ export class CloudstickApiClient {
         return this.request({ method: 'POST', url: `/whitelabel/servers/${serverId}/users/${userId}`, data });
     }
     public async getWhitelabelAppDetails(whitelabelId: string, serverId: string, userId: string) {
-        return this.request({ method: 'GET', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}` });
-    }
-    public async updateWhitelabelApp(whitelabelId: string, serverId: string, userId: string, data: Record<string, unknown>) {
-        return this.request({ method: 'PATCH', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}`, data });
+        return this.request({ method: 'GET', url: `/whitelabel/details/${whitelabelId}/servers/${serverId}/users/${userId}` });
     }
     public async deleteWhitelabelApp(whitelabelId: string, serverId: string, userId: string) {
-        return this.request({ method: 'DELETE', url: `/whitelabel/${whitelabelId}/servers/${serverId}/users/${userId}` });
+        return this.request({ method: 'GET', url: `/whitelabel/delete/${whitelabelId}/servers/${serverId}/users/${userId}` });
     }
 
     // 8.6 — phpMyAdmin DB Login
-    public async phpMyAdminDatabaseLogin(data: { database_id: string; [key: string]: unknown }) {
-        return this.request({ method: 'POST', url: `/phpmyadmin/database/login/`, data });
+    public async phpMyAdminDatabaseLogin(serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/phpmyadmin/database/login/servers/${serverId}/users/${userId}` });
     }
-    public async phpMyAdminAppLogin(websiteId: string, data: Record<string, unknown>) {
-        return this.request({ method: 'POST', url: `/phpmyadmin/login/websites/${websiteId}/`, data });
+    public async phpMyAdminAppLogin(websiteId: string, serverId: string, userId: string) {
+        return this.request({ method: 'GET', url: `/phpmyadmin/app-database/login/${websiteId}/servers/${serverId}/users/${userId}` });
     }
 }
 
