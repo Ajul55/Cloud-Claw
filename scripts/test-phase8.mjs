@@ -1,17 +1,27 @@
 /**
  * Phase 8 — Integration smoke test (no dependencies — uses built-in https)
  * Run: node test-phase8.mjs
+ *
+ * Required env:
+ *   CLOUDSTICK_TEST_TOKEN   — Cloudstick JWT bearer token
+ *   CLOUDSTICK_TEST_USER_ID — User ID the token belongs to
+ * Optional env:
+ *   CLOUDSTICK_HOST         — API host (default: staged-api.cloudstick.io)
+ *   ALLOW_MUTATIONS=1       — Enable POST/PATCH/DELETE and GET-based delete calls
  */
 
 import https from 'https';
 
-const BASE_HOST = 'staged-api.cloudstick.io';
+const TOKEN = process.env.CLOUDSTICK_TEST_TOKEN;
+if (!TOKEN) { console.error('Error: CLOUDSTICK_TEST_TOKEN env var is required'); process.exit(1); }
+
+const BASE_HOST = process.env.CLOUDSTICK_HOST || 'staged-api.cloudstick.io';
 const BASE_PATH = '/api/v2';
-const TOKEN  = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VySW5mbyI6eyJJZCI6OTY4NH19.afJJ_ZzHpdRBx4XAJtdOvFSxhsEGsTMOLDikundzBnWyL1eGHBPW2sK-LVJ1U6y0qURinGJk4AoPm0uaNVy7wurp33P13oxkH9phnvkdWGyibaezZA69Sb6_6vdFRM1EmBIhMo1TNMsRWJL0-L6U7sIqvPVQq9sStYVyv6VIYLc';
-const USER_ID   = '9684';
+const USER_ID   = process.env.CLOUDSTICK_TEST_USER_ID || '9684';
 const SERVER_ID = '1';   // dummy — expect 400/404 if invalid, not network error
 const WEBSITE_ID = '1';
 const WL_ID = '1';
+const ALLOW_MUTATIONS = process.env.ALLOW_MUTATIONS === '1';
 
 function request(method, path, body) {
     return new Promise((resolve, reject) => {
@@ -45,7 +55,19 @@ function request(method, path, body) {
 
 const results = [];
 
+const MUTATING_METHODS = new Set(['POST', 'PATCH', 'DELETE']);
+const DELETE_VIA_GET_RE = /\/delete\//;
+
+function isMutating(method, path) {
+    return MUTATING_METHODS.has(method) || DELETE_VIA_GET_RE.test(path);
+}
+
 async function test(label, method, path, body) {
+    if (isMutating(method, path) && !ALLOW_MUTATIONS) {
+        console.log(`  ${label.padEnd(62)}⏭  skipped (set ALLOW_MUTATIONS=1 to enable)`);
+        results.push({ label, status: 'skipped', ok: true });
+        return;
+    }
     process.stdout.write(`  ${label.padEnd(62)}`);
     try {
         const res = await request(method, path, body ?? null);
