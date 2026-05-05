@@ -6,9 +6,12 @@ import { ToolsPage } from './pages/ToolsPage';
 import { ServersPage } from './pages/ServersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { HelpPage } from './pages/HelpPage';
+import { TracePage } from './pages/TracePage';
+import { LoginPage } from './pages/LoginPage';
 import { ThemePicker } from './components/ThemePicker';
 import { Search, RefreshCw, AlertTriangle } from './components/Icons';
 import { useStats } from './hooks/useStats';
+import { useAuth } from './hooks/useAuth';
 import type { Range, NavPage, Theme } from './types';
 import { THEMES } from './types';
 
@@ -70,15 +73,19 @@ function RangeButton({
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const { auth, login, logout } = useAuth();
   const [activePage, setActivePage] = useState<NavPage>('Dashboard');
+  const [traceSessionId, setTraceSessionId] = useState<string | null>(null);
   const [range, setRange]           = useState<Range>('24h');
   const [theme, setTheme]           = useState<Theme>(THEMES.violet);
   const { data, loading, error, refresh } = useStats(range);
-
-  const totals = data?.totals ?? { tokens: 0, costUsd: 0, llmCalls: 0, pendingHitl: 0 };
-
   const { ripples: refreshRipples, addRipple: addRefreshRipple } = useRipple();
   const [refreshPressed, setRefreshPressed] = useState(false);
+
+  // Refetch stats immediately after login (cookie wasn't set during initial fetch)
+  useEffect(() => {
+    if (auth.status === 'authenticated') refresh();
+  }, [auth.status, refresh]);
 
   // Keyboard shortcuts: 1-4 for nav, R for refresh
   useEffect(() => {
@@ -91,6 +98,27 @@ export default function App() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [refresh]);
+
+  // Auth gate — show spinner while checking session, login page if unauthenticated
+  if (auth.status === 'loading') {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#0f0f13', fontFamily: "'Geist', -apple-system, sans-serif",
+      }}>
+        <div style={{ width: 28, height: 28, border: '3px solid #7e4ce630', borderTopColor: '#7e4ce6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      </div>
+    );
+  }
+
+  if (auth.status === 'unauthenticated') {
+    return <LoginPage onLogin={login} />;
+  }
+
+  const currentUser = auth.user;
+  const initials = currentUser.username.slice(0, 2).toUpperCase();
+
+  const totals = data?.totals ?? { tokens: 0, costUsd: 0, llmCalls: 0, pendingHitl: 0 };
 
   const showRangeBar = activePage === 'Dashboard';
 
@@ -179,27 +207,52 @@ export default function App() {
 
             <ThemePicker current={theme} onChange={setTheme} />
 
-            {/* Avatar */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              cursor: 'pointer', padding: '4px 8px', borderRadius: 8,
-            }}>
+            {/* Avatar + logout */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
-                width: 32, height: 32, borderRadius: '50%',
-                background: `linear-gradient(135deg,${theme.p},${theme.l})`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '4px 8px', borderRadius: 8,
               }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>PI</span>
+                <div style={{
+                  width: 32, height: 32, borderRadius: '50%',
+                  background: `linear-gradient(135deg,${theme.p},${theme.l})`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>{initials}</span>
+                </div>
+                <div style={{ lineHeight: 1.3 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>{currentUser.username}</div>
+                  <div style={{ fontSize: 10, color: '#9ca3af' }}>{currentUser.role}</div>
+                </div>
               </div>
-              <div style={{ lineHeight: 1.3 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>Pilot</div>
-                <div style={{ fontSize: 10, color: '#9ca3af' }}>Admin</div>
-              </div>
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none"
-                stroke="#9ca3af" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
+              <button
+                onClick={() => { void logout(); }}
+                title="Sign out"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 30, height: 30, borderRadius: 7,
+                  background: 'transparent', border: '1px solid #e5e7eb',
+                  cursor: 'pointer', color: '#9ca3af',
+                  transition: 'border-color 0.15s, color 0.15s',
+                  flexShrink: 0,
+                }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#fecaca';
+                  (e.currentTarget as HTMLButtonElement).style.color = '#ef4444';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#e5e7eb';
+                  (e.currentTarget as HTMLButtonElement).style.color = '#9ca3af';
+                }}
+              >
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                  <polyline points="16 17 21 12 16 7"/>
+                  <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+              </button>
             </div>
           </div>
         </header>
@@ -227,12 +280,19 @@ export default function App() {
           className="page-enter"
           style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}
         >
-          {activePage === 'Dashboard'  && <DashboardPage data={data} range={range} theme={theme} />}
-          {activePage === 'Sessions'   && <SessionsPage />}
-          {activePage === 'Tools'      && <ToolsPage />}
-          {activePage === 'Servers'    && <ServersPage />}
-          {activePage === 'Settings'   && <SettingsPage />}
-          {activePage === 'Help'       && <HelpPage />}
+          {traceSessionId
+            ? <TracePage sessionId={traceSessionId} onBack={() => setTraceSessionId(null)} />
+            : (
+              <>
+                {activePage === 'Dashboard'  && <DashboardPage data={data} range={range} theme={theme} />}
+                {activePage === 'Sessions'   && <SessionsPage onOpenTrace={setTraceSessionId} />}
+                {activePage === 'Tools'      && <ToolsPage />}
+                {activePage === 'Servers'    && <ServersPage />}
+                {activePage === 'Settings'   && <SettingsPage />}
+                {activePage === 'Help'       && <HelpPage />}
+              </>
+            )
+          }
         </main>
       </div>
     </div>

@@ -45,7 +45,11 @@ const td: React.CSSProperties = {
 
 type FilterStatus = 'all' | 'active' | 'resolved' | 'escalated';
 
-export function SessionsPage() {
+interface SessionsPageProps {
+  onOpenTrace?: (sessionId: string) => void;
+}
+
+export function SessionsPage({ onOpenTrace }: SessionsPageProps) {
   const { sessions, loading, error, refresh } = useSessions();
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [search, setSearch] = useState('');
@@ -164,6 +168,7 @@ export function SessionsPage() {
                   <th style={th}>Problem Class</th>
                   <th style={th}>Last Active</th>
                   <th style={th}>Created (IST)</th>
+                  <th style={th}></th>
                 </tr>
               </thead>
               <tbody>
@@ -194,6 +199,22 @@ export function SessionsPage() {
                       <td style={{ ...td, fontSize: 11, color: '#6B7280' }}>{s.problemClass ?? '—'}</td>
                       <td style={{ ...td, fontSize: 11, color: '#9CA3AF' }}>{timeAgo(s.lastActivity ?? s.updatedAt)}</td>
                       <td style={{ ...td, fontSize: 11, color: '#9CA3AF' }}>{fmtTime(s.createdAt)}</td>
+                      <td style={{ ...td }}>
+                        {onOpenTrace && (
+                          <button
+                            onClick={() => onOpenTrace(s.id)}
+                            style={{
+                              padding: '3px 10px', borderRadius: 6,
+                              border: `1px solid ${ACCENT}40`,
+                              background: `${ACCENT}10`, color: ACCENT,
+                              fontSize: 11, fontWeight: 600,
+                              cursor: 'pointer', fontFamily: 'inherit',
+                            }}
+                          >
+                            Trace →
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

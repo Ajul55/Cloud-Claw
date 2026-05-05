@@ -53,6 +53,7 @@ import type { StatusIndicator } from '../utils/status_indicator.js';
 import { trackUsage } from '../telemetry/usage_tracker.js';
 import { recordLlmSuccess, recordLlmFailure } from '../telemetry/llm_health.js';
 import { recordLLMProviderSuccess, recordLLMProviderFailure } from '../llm/provider.js';
+import { getDeepSeekClient, isDeepSeekEnabled, recordDeepSeekSuccess, recordDeepSeekFailure } from '../llm/provider.js';
 import { saveFix, getRecentFixes, searchFixes, formatFixesForPrompt } from '../memory/fix_memory.js';
 import {
     getAllServers,
@@ -98,6 +99,7 @@ import {
     EXISTING_WEBSITE_ATTACH_TOOLS,
 } from './loop_routing.js';
 import { extractCompletionChoice } from './loop_llm.js';
+import { recordEvent } from '../telemetry/event_recorder.js';
 import {
     encodeApprovalArgs,
     getTargetHostDisplay,
@@ -596,7 +598,21 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
         // 3. Call LLM
         let choice: OpenAI.ChatCompletion.Choice;
         let reqStart = Date.now();
-        const { client: openai, model: activeModel } = getLLMClient();
+
+        // ─── Dual-model routing ───────────────────────────────────────────
+        // When USE_DEEPSEEK is enabled and the task is low-risk, route to
+        // DeepSeek V3 (cheap, high-throughput).  Otherwise use the primary
+        // provider (MiniMax M2.7).  The routing decision is made once per
+        // iteration and logged for observability.
+        const dsClient = (intent.riskLevel === 'low' && intent.confidence >= 0.7)
+            ? getDeepSeekClient()
+            : null;
+        const usingDeepSeek = dsClient !== null;
+        const { client: openai, model: activeModel } = usingDeepSeek ? dsClient : getLLMClient();
+        const routingDecision = usingDeepSeek ? 'deepseek' : 'primary';
+        if (usingDeepSeek) {
+            logger.info('[loop] Routing to DeepSeek V3 (low-risk task)', { riskLevel: intent.riskLevel, confidence: intent.confidence });
+        }
         let reqLatency = 0;
 
         // One final strict sanitization pass: ensure absolutely NO orphaned tool messages remain.
@@ -616,32 +632,33 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             return true;
         });
 
-        try {
-            // Trim session to last 20 messages before each LLM call (Fix for BUG-10)
-            // Always keep the first message (original request context)
-            const MAX_HISTORY = 20;
-            let trimmedMessages = messages.length > MAX_HISTORY
-                ? [messages[0], ...messages.slice(-MAX_HISTORY + 1)]
-                : messages;
+        // Trim session to last 20 messages before each LLM call (Fix for BUG-10)
+        // Always keep the first message (original request context)
+        const MAX_HISTORY = 20;
+        let trimmedMessages = messages.length > MAX_HISTORY
+            ? [messages[0], ...messages.slice(-MAX_HISTORY + 1)]
+            : messages;
 
-            // Second pass cleans any orphans created BY the trim slice itself, which
-            // guarantees we never hit the 2013 "tool id not found" provider error.
-            const trimmedValidToolIds = new Set<string>();
-            trimmedMessages = trimmedMessages.filter((msg: any) => {
-                if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
-                    msg.tool_calls.forEach((tc: any) => {
-                        if (tc.id) trimmedValidToolIds.add(tc.id);
-                    });
-                } else if (msg.role === 'tool') {
-                    if (!msg.tool_call_id || !trimmedValidToolIds.has(msg.tool_call_id)) {
-                        logger.warn('[loop] Dropping orphaned tool message from trimmed window', { toolCallId: msg.tool_call_id });
-                        return false;
-                    }
+        // Second pass cleans any orphans created BY the trim slice itself, which
+        // guarantees we never hit the 2013 "tool id not found" provider error.
+        const trimmedValidToolIds = new Set<string>();
+        trimmedMessages = trimmedMessages.filter((msg: any) => {
+            if (msg.role === 'assistant' && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+                msg.tool_calls.forEach((tc: any) => {
+                    if (tc.id) trimmedValidToolIds.add(tc.id);
+                });
+            } else if (msg.role === 'tool') {
+                if (!msg.tool_call_id || !trimmedValidToolIds.has(msg.tool_call_id)) {
+                    logger.warn('[loop] Dropping orphaned tool message from trimmed window', { toolCallId: msg.tool_call_id });
+                    return false;
                 }
-                return true;
-            });
+            }
+            return true;
+        });
 
-            logger.info('[loop] Outgoing messages to API', { from: messages.length, to: trimmedMessages.length });
+        logger.info('[loop] Outgoing messages to API', { from: messages.length, to: trimmedMessages.length });
+
+        try {
 
             const LLM_TIMEOUT_MS = 120_000;
 
@@ -669,12 +686,29 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 }
             };
 
+            recordEvent({
+                session_id: message.sessionId,
+                iteration,
+                event_type: 'llm_call_start',
+                tool_name: null,
+                args: null,
+                result_summary: null,
+                duration_ms: null,
+                success: null,
+                input_tokens: Math.floor(trimmedMessages.reduce((n, m) => n + JSON.stringify(m).length, 0) / 4),
+                output_tokens: null,
+                cache_read_tokens: null,
+                finish_reason: null,
+            });
+
             let response = await callWithTimeout({
                 model: activeModel,
                 messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
                 tools: toolDefinitions,
                 tool_choice: toolChoice,
                 temperature: 0.2,
+                // DeepSeek: cap output to control costs ($0.28/1M out)
+                ...(usingDeepSeek ? { max_tokens: 2048 } : {}),
             });
             reqLatency = Date.now() - reqStart;
 
@@ -695,7 +729,26 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             choice = extractCompletionChoice(response);
             recordLlmSuccess();
-            recordLLMProviderSuccess();
+            if (usingDeepSeek) {
+                recordDeepSeekSuccess();
+            } else {
+                recordLLMProviderSuccess();
+            }
+
+            recordEvent({
+                session_id: message.sessionId,
+                iteration,
+                event_type: 'llm_call_complete',
+                tool_name: null,
+                args: null,
+                result_summary: choice.finish_reason ?? null,
+                duration_ms: reqLatency,
+                success: true,
+                input_tokens: response.usage?.prompt_tokens ?? null,
+                output_tokens: response.usage?.completion_tokens ?? null,
+                cache_read_tokens: (response.usage as any)?.prompt_tokens_details?.cached_tokens ?? null,
+                finish_reason: choice.finish_reason ?? null,
+            });
 
             // Handle usage tracking
             const usage = response.usage;
@@ -712,29 +765,105 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     latencyMs: reqLatency,
                     toolName: calledTools,
                     accountId,
+                    routingDecision,
                 });
             }
         } catch (err: any) {
-            recordLlmFailure();
-            recordLLMProviderFailure();
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.error('[loop] LLM error', err instanceof Error ? err : undefined, { msg });
-            if (err.error?.failed_generation) {
-                logger.error('[loop] Failed generation', undefined, { failedGeneration: err.error.failed_generation });
-            } else if (err.failed_generation) {
-                logger.error('[loop] Failed generation', undefined, { failedGeneration: err.failed_generation });
+            // ─── DeepSeek fallback: retry with MiniMax if DeepSeek was the one that failed ──
+            if (usingDeepSeek) {
+                recordDeepSeekFailure();
+                const dsMsg = err instanceof Error ? err.message : String(err);
+                logger.warn('[loop] DeepSeek failed — falling back to primary provider (MiniMax)', { error: dsMsg });
+
+                // Retry this iteration with the primary provider
+                try {
+                    reqStart = Date.now();
+                    const primary = getLLMClient();
+                    const callWithTimeoutPrimary = async (
+                        opts: Parameters<typeof primary.client.chat.completions.create>[0]
+                    ): Promise<OpenAI.ChatCompletion> => {
+                        const ctrl = new AbortController();
+                        const handle = setTimeout(() => ctrl.abort(), 120_000);
+                        try {
+                            return await primary.client.chat.completions.create(
+                                { ...opts, stream: false },
+                                { signal: ctrl.signal }
+                            ) as OpenAI.ChatCompletion;
+                        } catch (fallbackErr: unknown) {
+                            const name = (fallbackErr as { name?: string }).name ?? '';
+                            if (name === 'AbortError' || ctrl.signal.aborted) {
+                                throw new Error('LLM fallback call timed out after 120s');
+                            }
+                            throw fallbackErr;
+                        } finally {
+                            clearTimeout(handle);
+                        }
+                    };
+
+                    const fallbackResponse = await callWithTimeoutPrimary({
+                        model: primary.model,
+                        messages: [{ role: 'system', content: fullSystemPrompt }, ...trimmedMessages],
+                        tools: toolDefinitions,
+                        tool_choice: toolChoice,
+                        temperature: 0.2,
+                    });
+                    reqLatency = Date.now() - reqStart;
+                    choice = extractCompletionChoice(fallbackResponse);
+                    recordLlmSuccess();
+                    recordLLMProviderSuccess();
+
+                    // Track fallback usage
+                    const fallbackUsage = fallbackResponse.usage;
+                    if (fallbackUsage) {
+                        const calledTools = choice.message?.tool_calls?.map((t: any) => t.function.name).join(',') || undefined;
+                        const accountId = message.sessionId.startsWith('cloudstick:')
+                            ? message.sessionId.slice('cloudstick:'.length)
+                            : undefined;
+                        void trackUsage({
+                            sessionId: message.sessionId,
+                            model: primary.model,
+                            tokensIn: fallbackUsage.prompt_tokens,
+                            tokensOut: fallbackUsage.completion_tokens,
+                            latencyMs: reqLatency,
+                            toolName: calledTools,
+                            accountId,
+                            routingDecision: 'deepseek_fallback',
+                        });
+                    }
+
+                    logger.info('[loop] DeepSeek fallback to primary succeeded', { model: primary.model });
+                } catch (fallbackErr: any) {
+                    // Both DeepSeek and primary failed
+                    recordLlmFailure();
+                    recordLLMProviderFailure();
+                    const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+                    logger.error('[loop] Both DeepSeek and primary LLM failed', fallbackErr instanceof Error ? fallbackErr : undefined, { msg });
+                    await indicator?.stop();
+                    await onReply(`❌ LLM error: ${msg}`);
+                    break;
+                }
+            } else {
+                recordLlmFailure();
+                recordLLMProviderFailure();
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.error('[loop] LLM error', err instanceof Error ? err : undefined, { msg });
+                if (err.error?.failed_generation) {
+                    logger.error('[loop] Failed generation', undefined, { failedGeneration: err.error.failed_generation });
+                } else if (err.failed_generation) {
+                    logger.error('[loop] Failed generation', undefined, { failedGeneration: err.failed_generation });
+                }
+                await indicator?.stop();
+                if (msg.includes('timed out')) {
+                    const { sendOpsAlert } = await import('../telemetry/ops_alerts.js');
+                    void sendOpsAlert(
+                        'LLM Timeout',
+                        `Session ${message.sessionId} timed out after 120s. Provider: ${activeModel}.`,
+                        'warning'
+                    );
+                }
+                await onReply(`❌ LLM error: ${msg}`);
+                break;
             }
-            await indicator?.stop();
-            if (msg.includes('timed out')) {
-                const { sendOpsAlert } = await import('../telemetry/ops_alerts.js');
-                void sendOpsAlert(
-                    'LLM Timeout',
-                    `Session ${message.sessionId} timed out after 120s. Provider: ${activeModel}.`,
-                    'warning'
-                );
-            }
-            await onReply(`❌ LLM error: ${msg}`);
-            break;
         }
 
         if (choice.message?.content) {
@@ -775,6 +904,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             if (isHallucination) {
                 logger.error('[loop] HALLUCINATION DETECTED — LLM claimed success without sufficient tool execution', undefined, { receipts: [...executionReceipts.keys()] });
+                recordEvent({
+                    session_id: message.sessionId,
+                    iteration,
+                    event_type: 'hallucination_detected',
+                    tool_name: null,
+                    args: null,
+                    result_summary: `Receipts: [${[...executionReceipts.keys()].join(', ') || 'none'}]`,
+                    duration_ms: null,
+                    success: false,
+                    input_tokens: null,
+                    output_tokens: null,
+                    cache_read_tokens: null,
+                    finish_reason: null,
+                });
                 if (hallucinationRetryCount >= MAX_HALLUCINATION_RETRIES) {
                     logger.warn('[loop] Max hallucination retries reached — breaking loop');
                     await indicator?.stop();
@@ -1052,6 +1195,21 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                     rationale: toolApproval.rationale,
                 });
 
+                recordEvent({
+                    session_id: message.sessionId,
+                    iteration,
+                    event_type: 'hitl_requested',
+                    tool_name: toolName,
+                    args: toolArgs,
+                    result_summary: `Approval ID: ${saved.id} — ${toolApproval.rationale ?? ''}`,
+                    duration_ms: null,
+                    success: null,
+                    input_tokens: null,
+                    output_tokens: null,
+                    cache_read_tokens: null,
+                    finish_reason: null,
+                });
+
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -1121,6 +1279,21 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                             command: encodedCommand,
                             targetHost,
                             rationale: approvalReason,
+                        });
+
+                        recordEvent({
+                            session_id: message.sessionId,
+                            iteration,
+                            event_type: 'hitl_requested',
+                            tool_name: toolName,
+                            args: toolArgs,
+                            result_summary: `Approval ID: ${saved.id} — ${approvalReason}`,
+                            duration_ms: null,
+                            success: null,
+                            input_tokens: null,
+                            output_tokens: null,
+                            cache_read_tokens: null,
+                            finish_reason: null,
                         });
 
                         messages.push({
@@ -1197,6 +1370,21 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 });
                 continue;
             }
+            recordEvent({
+                session_id: message.sessionId,
+                iteration,
+                event_type: 'tool_start',
+                tool_name: toolName,
+                args: toolArgs,
+                result_summary: null,
+                duration_ms: null,
+                success: null,
+                input_tokens: null,
+                output_tokens: null,
+                cache_read_tokens: null,
+                finish_reason: null,
+            });
+            const _toolStart = Date.now();
             try {
                 logger.info('[loop] Executing tool', { toolName, target: String(toolArgs.server_label ?? toolArgs.host ?? 'N/A') });
                 if (toolArgs.server_label === 'all') {
@@ -1253,6 +1441,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
                 const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
                 logger.error('[loop] Tool threw an unexpected error', toolErr instanceof Error ? toolErr : undefined, { toolName, errMsg });
                 result = { success: false, output: `Tool "${toolName}" threw an unexpected error: ${errMsg}` };
+                recordEvent({
+                    session_id: message.sessionId,
+                    iteration,
+                    event_type: 'tool_error',
+                    tool_name: toolName,
+                    args: null,
+                    result_summary: errMsg,
+                    duration_ms: Date.now() - _toolStart,
+                    success: false,
+                    input_tokens: null,
+                    output_tokens: null,
+                    cache_read_tokens: null,
+                    finish_reason: null,
+                });
             }
 
             // Sanitize once for both success and error paths
@@ -1265,6 +1467,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
             }
             sanitizedOutput = sanitized.output;
             logger.info('[loop] Tool complete', { toolName, success: result.success, outputLength: sanitized.output.length });
+            recordEvent({
+                session_id: message.sessionId,
+                iteration,
+                event_type: result.success ? 'tool_complete' : 'tool_error',
+                tool_name: toolName,
+                args: null,
+                result_summary: sanitized.output.slice(0, 500),
+                duration_ms: Date.now() - _toolStart,
+                success: result.success,
+                input_tokens: null,
+                output_tokens: null,
+                cache_read_tokens: null,
+                finish_reason: null,
+            });
 
             // For diagnose_nginx, if it successfully found a path, use its hash so fix_nginx_config can verify it
             let receiptOutputOrHash = sanitizedOutput || result.output;
@@ -1324,6 +1540,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
 
             if (identicalCount >= 2) {
                  logger.warn('[loop] LOOP GUARD BLOCKED: tool with identical args repeated 3 times', { toolName });
+                 recordEvent({
+                     session_id: message.sessionId,
+                     iteration,
+                     event_type: 'loop_guard_blocked',
+                     tool_name: toolName,
+                     args: toolArgs,
+                     result_summary: `Identical call repeated ${identicalCount + 1} times`,
+                     duration_ms: null,
+                     success: false,
+                     input_tokens: null,
+                     output_tokens: null,
+                     cache_read_tokens: null,
+                     finish_reason: null,
+                 });
                  messages.push({
                      role: 'tool',
                      tool_call_id: toolCall.id,
@@ -1509,6 +1739,20 @@ ${priorToolLines || 'No prior tool outputs recorded.'}`
     // Guard: hit max iterations
     if (iteration >= MAX_ITERATIONS) {
         logger.warn('[loop] Max iterations reached', { iteration });
+        recordEvent({
+            session_id: message.sessionId,
+            iteration,
+            event_type: 'max_iterations_reached',
+            tool_name: null,
+            args: null,
+            result_summary: `Hit ${iteration}-iteration cap`,
+            duration_ms: null,
+            success: false,
+            input_tokens: null,
+            output_tokens: null,
+            cache_read_tokens: null,
+            finish_reason: null,
+        });
         await indicator?.stop();
         const escalationText =
             `⚠️ Complex issue — reached reasoning limit after ${iteration} steps.\n\n`

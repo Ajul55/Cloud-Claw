@@ -1,3 +1,13 @@
+export interface AdminUser {
+  username: string;
+  role: string;
+}
+
+export type AuthState =
+  | { status: 'loading' }
+  | { status: 'authenticated'; user: AdminUser }
+  | { status: 'unauthenticated' };
+
 export type Range = '24h' | '7d' | '30d';
 export type BurnRange = '7d' | '14d' | '30d';
 
@@ -93,4 +103,45 @@ export interface ToolEntry {
   toolName: string;
   count: number;
   lane: 1 | 2 | 3;
+}
+
+export type AgentEventType =
+  | 'llm_call_start'
+  | 'llm_call_complete'
+  | 'tool_start'
+  | 'tool_complete'
+  | 'tool_error'
+  | 'hitl_requested'
+  | 'hitl_resolved'
+  | 'hallucination_detected'
+  | 'loop_guard_blocked'
+  | 'max_iterations_reached';
+
+export interface AgentEvent {
+  id: number;
+  session_id: string;
+  iteration: number;
+  event_type: AgentEventType;
+  tool_name: string | null;
+  args: Record<string, unknown> | null;
+  result_summary: string | null;
+  duration_ms: number | null;
+  success: boolean | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  finish_reason: string | null;
+  timestamp: string;
+}
+
+export interface TraceResponse {
+  events: AgentEvent[];
+  messages: Array<{ role: string; content: unknown }>;
+  session: {
+    id: string;
+    channel: string;
+    status: string;
+    iteration: number;
+    created_at: string;
+  } | null;
 }

@@ -10,6 +10,8 @@ export interface Intent {
     needsClarification: boolean;
     requiresServerClarification: boolean;
     confidence: number;
+    /** Risk level for dual-model routing: 'low' = safe for cheap model, 'high' = needs primary model */
+    riskLevel: 'low' | 'high';
 }
 
 const AUDIT_OVERRIDE_PATTERNS = [
@@ -38,36 +40,44 @@ Analyze the user's message and return a strictly typed JSON object matching this
   "domains": string[], // List of real hostnames mentioned (e.g. "example.com"). NO IP addresses, NO version strings (e.g. "v2.0"), NO file extensions masquerading as domains (e.g. ".ts", ".js", ".conf").
   "isApprovalResponse": boolean, // Is this an approval response like "yes", "proceed", "no", "reject"?
   "needsClarification": boolean, // Is the request too vague to act upon safely?
-  "confidence": number // 0 to 1 confidence scale
+  "confidence": number, // 0 to 1 confidence scale
+  "riskLevel": "low" | "high" // LOW = read-only queries, log analysis, status checks, listing info, simple script gen. HIGH = anything that modifies infrastructure, restarts services, deletes files, generates commands for live systems, debugging production failures, scaling/rollback decisions, CI/CD logic, multi-step reasoning.
 }
+
+Risk classification rules:
+- "low": log parsing, metrics summarization, read-only checks (SSL status, server details, website listing), documentation, simple script generation, general questions
+- "high": fix/repair/restart/rollback, command generation that affects live systems, infrastructure decisions, debugging production failures, diagnosing down sites or unknown errors, anything requiring multi-step reasoning or that can break infra if wrong
 
 Examples:
 User: "my website example.com is down, check it"
-Output: {"requiresTool":true,"toolHint":"diagnose_domain","isAudit":false,"targetServer":"unknown","domains":["example.com"],"isApprovalResponse":false,"needsClarification":false,"confidence":0.9}
+Output: {"requiresTool":true,"toolHint":"diagnose_domain","isAudit":false,"targetServer":"unknown","domains":["example.com"],"isApprovalResponse":false,"needsClarification":false,"confidence":0.9,"riskLevel":"high"}
 
 User: "is cloudstick connected?"
-Output: {"requiresTool":true,"toolHint":"check_cloudstick_connection","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"check_cloudstick_connection","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "check SSL status" or "is SSL installed?"
-Output: {"requiresTool":true,"toolHint":"check_ssl_api","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"check_ssl_api","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "list websites" or "what websites are on the server?"
-Output: {"requiresTool":true,"toolHint":"get_cloudstick_websites","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"get_cloudstick_websites","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "server details" or "what PHP version is running?"
-Output: {"requiresTool":true,"toolHint":"get_server_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"get_server_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "wordpress details" or "what WP version?" or "list plugins"
-Output: {"requiresTool":true,"toolHint":"get_wordpress_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"get_wordpress_details","isAudit":true,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "fix nginx on test"
-Output: {"requiresTool":true,"toolHint":"diagnose_nginx","isAudit":false,"targetServer":"test","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":true,"toolHint":"diagnose_nginx","isAudit":false,"targetServer":"test","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"high"}
+
+User: "restart mysql"
+Output: {"requiresTool":true,"toolHint":"execute_ssh_command","isAudit":false,"targetServer":"unknown","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"high"}
 
 User: "• mail-server (65.20.79.171)"
-Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"mail-server","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"mail-server","domains":[],"isApprovalResponse":false,"needsClarification":false,"confidence":1.0,"riskLevel":"low"}
 
 User: "do it"
-Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"unknown","domains":[],"isApprovalResponse":true,"needsClarification":false,"confidence":1.0}
+Output: {"requiresTool":false,"toolHint":"none","isAudit":false,"targetServer":"unknown","domains":[],"isApprovalResponse":true,"needsClarification":false,"confidence":1.0,"riskLevel":"high"}
 
 Return ONLY standard JSON without markdown wrapping or comments.`;
 
@@ -81,7 +91,8 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
         isApprovalResponse: false,
         needsClarification: false,
         requiresServerClarification: false,
-        confidence: 0
+        confidence: 0,
+        riskLevel: 'low',
     };
 
     if (!messageText || !messageText.trim()) {
@@ -161,11 +172,16 @@ export async function classifyIntent(messageText: string): Promise<Intent> {
     const OPERATIONAL_KEYWORDS = /\b(nginx|mysql|mariadb|php|ssl|disk|apache|redis|server|website|domain|fix|repair|restart|check|diagnose|audit|scan|status|down|error|fail|crash|timeout)\b/i;
     const requiresTool = OPERATIONAL_KEYWORDS.test(messageText) || isAuditOverride;
 
+    // Heuristic risk classification when LLM is unavailable
+    const HIGH_RISK_KEYWORDS = /\b(fix|repair|restart|rollback|deploy|delete|remove|scale|failover|create|install|update|modify|enable|disable|stop|start|backup|restore|down|error|fail|crash|timeout)\b/i;
+    const heuristicRiskLevel = HIGH_RISK_KEYWORDS.test(messageText) ? 'high' as const : 'low' as const;
+
     return {
         ...defaultIntent,
         isAudit: isAuditOverride,
         isApprovalResponse: isApproval,
         requiresTool,
         toolHint: requiresTool ? 'execute_ssh_command' : 'none',
+        riskLevel: heuristicRiskLevel,
     };
 }

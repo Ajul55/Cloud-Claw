@@ -111,6 +111,7 @@ import { fixWordpressDbTool } from './fix_wordpress_db.js';
 import { diagnosePhpPoolTool } from './diagnose_php_pool.js';
 import { manageCsfFirewallTool } from './manage_csf_firewall.js';
 import { readCloudstickLogsTool } from './read_cloudstick_logs.js';
+import { analyzeLargeLogsDeepseekTool } from './analyze_large_logs_deepseek.js';
 
 const ALL_TOOLS: Tool[] = [
     getCurrentTimeTool,
@@ -252,6 +253,8 @@ const ALL_TOOLS: Tool[] = [
     fixWordpressDbTool,
     // ── Cloudstick Internal Logs ─────────────────────────────────────────
     readCloudstickLogsTool,
+    // ── DeepSeek-powered Log Analysis (Supervisor-Worker pattern) ────────
+    analyzeLargeLogsDeepseekTool,
     // ── Tier 1 Fix + Tier 2: Supervisor Jobs ────────────────────────────────
     listServerSupervisorJobsTool,
     listWebsiteSupervisorJobsTool,
@@ -296,16 +299,16 @@ export function getAllToolNames(): string[] {
 
 // MED-12: Tool groups keyed by intent toolHint — limits tokens sent to LLM per request
 const INTENT_TOOL_GROUPS: Record<string, string[]> = {
-    diagnose_nginx:      ['diagnose_nginx', 'fix_nginx_config', 'execute_ssh_command', 'get_server_details', 'create_nginx_vhost'],
-    diagnose_domain:     ['diagnose_domain', 'diagnose_nginx', 'renew_ssl', 'check_ssl_api', 'cloudflare_cache_purge', 'execute_ssh_command'],
-    diagnose_services:   ['diagnose_services', 'execute_ssh_command', 'manage_services', 'repair_mysql', 'manage_php', 'get_server_details'],
+    diagnose_nginx:      ['diagnose_nginx', 'fix_nginx_config', 'execute_ssh_command', 'get_server_details', 'create_nginx_vhost', 'analyze_large_logs_deepseek'],
+    diagnose_domain:     ['diagnose_domain', 'diagnose_nginx', 'renew_ssl', 'check_ssl_api', 'cloudflare_cache_purge', 'execute_ssh_command', 'analyze_large_logs_deepseek'],
+    diagnose_services:   ['diagnose_services', 'execute_ssh_command', 'manage_services', 'repair_mysql', 'manage_php', 'get_server_details', 'analyze_large_logs_deepseek'],
     cloudflare_cache_purge: ['cloudflare_cache_purge', 'diagnose_domain', 'execute_ssh_command'],
     check_cloudstick_connection: ['check_cloudstick_connection', 'get_cloudstick_websites', 'get_server_details'],
     check_ssl_api:       ['check_ssl_api', 'renew_ssl', 'diagnose_domain'],
     get_cloudstick_websites: ['get_cloudstick_websites', 'get_wordpress_details', 'get_server_details'],
     get_server_details:  ['get_server_details', 'execute_ssh_command', 'diagnose_services'],
     get_wordpress_details: ['get_wordpress_details', 'fix_wordpress', 'diagnose_nginx', 'execute_ssh_command'],
-    execute_ssh_command: ['execute_ssh_command', 'execute_ssh_write', 'get_server_details', 'diagnose_services'],
+    execute_ssh_command: ['execute_ssh_command', 'execute_ssh_write', 'get_server_details', 'diagnose_services', 'analyze_large_logs_deepseek'],
 };
 
 /** Returns OpenAI-compatible function definitions for the LLM.

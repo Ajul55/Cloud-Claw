@@ -44,6 +44,54 @@ export function getCurrentLLMConfig() {
     };
 }
 
+// ─── DeepSeek integration ─────────────────────────────────────────────────────
+// Returns a DeepSeek-specific LLMConfig if the feature flag is enabled and the
+// API key is present.  Returns `null` otherwise so the caller can cleanly fall
+// through to the default provider (getLLMClient).
+//
+// Usage in the loop / routing layer:
+//     const ds = getDeepSeekClient();
+//     const { client, model, provider } = ds ?? getLLMClient();
+
+// Circuit breaker state for DeepSeek specifically — prevents repeated calls to
+// a flaky DeepSeek endpoint from blocking the loop.
+let _dsConsecutiveFailures = 0;
+let _dsFallbackUntil = 0;
+const DS_CIRCUIT_BREAKER_THRESHOLD = 3;
+const DS_FALLBACK_DURATION_MS = 5 * 60 * 1000;
+
+export function recordDeepSeekSuccess(): void {
+    _dsConsecutiveFailures = 0;
+    _dsFallbackUntil = 0;
+}
+
+export function recordDeepSeekFailure(): void {
+    _dsConsecutiveFailures++;
+    if (_dsConsecutiveFailures >= DS_CIRCUIT_BREAKER_THRESHOLD) {
+        _dsFallbackUntil = Date.now() + DS_FALLBACK_DURATION_MS;
+        console.warn(`[provider] DeepSeek circuit breaker tripped after ${_dsConsecutiveFailures} failures — disabled for 5 min`);
+    }
+}
+
+export function isDeepSeekEnabled(): boolean {
+    return env.USE_DEEPSEEK === 'true'
+        && !!env.DEEPSEEK_API_KEY
+        && !(_dsFallbackUntil > 0 && Date.now() < _dsFallbackUntil);
+}
+
+export function getDeepSeekClient(): LLMConfig | null {
+    if (!isDeepSeekEnabled()) return null;
+
+    const client = new OpenAI({
+        apiKey: env.DEEPSEEK_API_KEY!,
+        baseURL: 'https://api.deepseek.com/v1',
+    });
+
+    return { client, model: 'deepseek-chat', provider: 'deepseek' };
+}
+
+// ─── Primary provider (unchanged default path) ───────────────────────────────
+
 export function getLLMClient(): LLMConfig {
     // HIGH-9: If circuit breaker tripped and a fallback is configured, use it
     const isFallback = isUsingFallback() && !!env.LLM_FALLBACK_PROVIDER;
@@ -65,8 +113,12 @@ export function getLLMClient(): LLMConfig {
     } else if (provider === 'minimax') {
         apiKey = env.MINIMAX_API_KEY || apiKey;
         baseURL = 'https://api.minimaxi.chat/v1';
-        // MiniMax-M2.5 is optimized for agentic workflows and tool calling
-        if (!globalModelOverride && env.LLM_MODEL === 'gpt-4o') model = 'MiniMax-M2.5';
+        // MiniMax-M2.7 is optimized for agentic workflows and tool calling
+        if (!globalModelOverride && env.LLM_MODEL === 'gpt-4o') model = 'MiniMax-M2.7';
+    } else if (provider === 'deepseek') {
+        apiKey = env.DEEPSEEK_API_KEY || apiKey;
+        baseURL = 'https://api.deepseek.com/v1';
+        if (!globalModelOverride && env.LLM_MODEL === 'gpt-4o') model = 'deepseek-chat';
     } else if (provider === 'anthropic') {
         apiKey = env.ANTHROPIC_API_KEY || apiKey;
         // Anthropic doesn't have a native OpenAI endpoints, typically people use LiteLLM 

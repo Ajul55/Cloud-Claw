@@ -7,15 +7,19 @@ const EnvSchema = z.object({
 
     LLM_BASE_URL: z.string().url().optional(),
     LLM_MODEL: z.string().default('gpt-4o'),
-    LLM_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).default('openai'),
+    LLM_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax', 'deepseek']).default('openai'),
     // HIGH-9: Optional fallback provider activated by circuit breaker after 3 failures
-    LLM_FALLBACK_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax']).optional(),
+    LLM_FALLBACK_PROVIDER: z.enum(['openai', 'anthropic', 'groq', 'minimax', 'deepseek']).optional(),
     LLM_FALLBACK_MODEL: z.string().optional(),
 
     // Additional API keys for switching
     ANTHROPIC_API_KEY: z.string().optional(),
     GROQ_API_KEY: z.string().optional(),
     MINIMAX_API_KEY: z.string().optional(),
+    DEEPSEEK_API_KEY: z.string().optional(),
+    // Feature flag: set to 'true' to enable DeepSeek routing for low-risk tasks.
+    // When false (default), MiniMax is used for everything as before.
+    USE_DEEPSEEK: z.preprocess((val) => val === 'true' || val === '1' ? 'true' : 'false', z.enum(['true', 'false']).default('false')),
     SERPAPI_KEY: z.string().optional(),
     CLOUDFLARE_API_TOKEN: z.string().optional(),
     CLOUDFLARE_ZONE_ID: z.string().optional(),

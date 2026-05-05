@@ -1,23 +1,14 @@
 import http from 'http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fetchStats, fetchSessions, fetchServers, fetchApprovals, fetchTools, fetchBurnRate, type Range, type BurnRange } from './queries.js';
+import { fetchStats, fetchSessions, fetchServers, fetchApprovals, fetchTools, fetchBurnRate, fetchSessionTrace, type Range, type BurnRange } from './queries.js';
 import { isDBConfigured } from '../database/db.js';
+import { getSessionAdmin, handleLogin, handleLogout, handleMe } from './auth.js';
 
 // process.cwd() is /app in Docker and repo root in dev — both correct
 const DIST_DIR = path.resolve(process.cwd(), 'dist/public');
 const VALID_RANGES      = new Set<Range>(['24h', '7d', '30d']);
 const VALID_BURN_RANGES = new Set<BurnRange>(['7d', '14d', '30d']);
-
-function checkDashboardAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-    const token = process.env.DASHBOARD_TOKEN;
-    if (!token) return true; // auth disabled when token not configured
-    const header = req.headers['authorization'] ?? '';
-    if (header === `Bearer ${token}`) return true;
-    res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
-    res.end(JSON.stringify({ error: 'unauthorized' }));
-    return false;
-}
 
 function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string, isHashed = false): void {
     if (!fs.existsSync(filePath)) {
@@ -63,9 +54,19 @@ export async function handleDashboardRequest(
         return;
     }
 
-    // ── Auth gate for all API routes ─────────────────────────────────────────
+    // ── Auth routes (public) ──────────────────────────────────────────────────
+    if (pathname === '/api/auth/login'  && req.method === 'POST') { await handleLogin(req, res);  return; }
+    if (pathname === '/api/auth/logout' && req.method === 'POST') { await handleLogout(req, res); return; }
+    if (pathname === '/api/auth/me'     && req.method === 'GET')  { await handleMe(req, res);     return; }
+
+    // ── Session-cookie auth gate for all other API routes ────────────────────
     if (pathname.startsWith('/api/')) {
-        if (!checkDashboardAuth(req, res)) return;
+        const admin = await getSessionAdmin(req);
+        if (!admin) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'unauthenticated' }));
+            return;
+        }
     }
 
     // ── /api/stats ────────────────────────────────────────────────────────────
@@ -195,6 +196,27 @@ export async function handleDashboardRequest(
             res.end(JSON.stringify(result));
         } catch (err) {
             console.error('[dashboard] /api/tools error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+        return;
+    }
+
+    // ── /api/sessions/:sessionId/trace ────────────────────────────────────────
+    const traceMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/trace$/);
+    if (traceMatch) {
+        if (!isDBConfigured()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'db_not_configured' }));
+            return;
+        }
+        const sessionId = decodeURIComponent(traceMatch[1]);
+        try {
+            const trace = await fetchSessionTrace(sessionId);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(trace));
+        } catch (err) {
+            console.error('[dashboard] /api/sessions/:id/trace error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'internal_error' }));
         }

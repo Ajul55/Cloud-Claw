@@ -242,3 +242,7 @@ html, body {
   from { transform: scaleY(0); transform-origin: bottom; }
   to   { transform: scaleY(1); transform-origin: bottom; }
 }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

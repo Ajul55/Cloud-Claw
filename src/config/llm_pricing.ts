@@ -15,5 +15,12 @@ export const LLM_PRICING: Record<string, { in: number; out: number }> = {
 
     // MiniMax
     'abab6.5s-chat':             { in: 1.0,  out: 1.0  },
-    'minimax-m2.5':              { in: 0.8,  out: 0.8  },
+    'minimax-m2.5':              { in: 0.3,  out: 1.2  },
+    'minimax-m2.5-highspeed':    { in: 0.6,  out: 2.4  },
+    'minimax-m2.7':              { in: 0.3,  out: 1.2  },
+    'minimax-m2.7-highspeed':    { in: 0.6,  out: 2.4  },
+    'm2-her':                    { in: 0.3,  out: 1.2  },
+
+    // DeepSeek
+    'deepseek-chat':             { in: 0.14, out: 0.28 },
 };

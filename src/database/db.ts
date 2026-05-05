@@ -100,6 +100,28 @@ export async function connectDB(): Promise<void> {
                 await migrationClient.query(`ALTER TABLE IF EXISTS approval_queue ADD COLUMN IF NOT EXISTS slack_channel TEXT;`);
                 await migrationClient.query(`ALTER TABLE IF EXISTS approval_queue ADD COLUMN IF NOT EXISTS slack_message_ts TEXT;`);
 
+                // Agent trace event log
+                await migrationClient.query(`
+                  CREATE TABLE IF NOT EXISTS agent_events (
+                    id                SERIAL PRIMARY KEY,
+                    session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    iteration         INTEGER NOT NULL DEFAULT 0,
+                    event_type        TEXT NOT NULL,
+                    tool_name         TEXT,
+                    args              JSONB,
+                    result_summary    TEXT,
+                    duration_ms       INTEGER,
+                    success           BOOLEAN,
+                    input_tokens      INTEGER,
+                    output_tokens     INTEGER,
+                    cache_read_tokens INTEGER,
+                    finish_reason     TEXT,
+                    timestamp         TIMESTAMPTZ NOT NULL DEFAULT now()
+                  );
+                `);
+                await migrationClient.query(`CREATE INDEX IF NOT EXISTS agent_events_session_id_idx ON agent_events(session_id);`);
+                await migrationClient.query(`CREATE INDEX IF NOT EXISTS agent_events_timestamp_idx ON agent_events(timestamp DESC);`);
+
                 // Usage log: ensure account_id column exists for multi-tenant tracking
                 await migrationClient.query(`ALTER TABLE IF EXISTS usage_log ADD COLUMN IF NOT EXISTS account_id TEXT;`);
 
@@ -611,6 +633,78 @@ export async function cleanupOldFixes(maxAgeDays = 90): Promise<number> {
         console.warn('[fix_memory] TTL cleanup failed (non-fatal):', err);
         return 0;
     }
+}
+
+// ─── Agent Event Trace ─────────────────────────────────────────────────────────
+
+export interface AgentEvent {
+    id: number;
+    session_id: string;
+    iteration: number;
+    event_type: string;
+    tool_name: string | null;
+    args: Record<string, unknown> | null;
+    result_summary: string | null;
+    duration_ms: number | null;
+    success: boolean | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    finish_reason: string | null;
+    timestamp: Date;
+}
+
+export async function insertAgentEvent(event: Omit<AgentEvent, 'id'>): Promise<void> {
+    if (!isDBConfigured()) return;
+    try {
+        await getPool().query(
+            `INSERT INTO agent_events
+               (session_id, iteration, event_type, tool_name, args, result_summary,
+                duration_ms, success, input_tokens, output_tokens, cache_read_tokens,
+                finish_reason, timestamp)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+            [
+                event.session_id,
+                event.iteration,
+                event.event_type,
+                event.tool_name ?? null,
+                event.args ? JSON.stringify(event.args) : null,
+                event.result_summary ?? null,
+                event.duration_ms ?? null,
+                event.success ?? null,
+                event.input_tokens ?? null,
+                event.output_tokens ?? null,
+                event.cache_read_tokens ?? null,
+                event.finish_reason ?? null,
+                event.timestamp,
+            ]
+        );
+    } catch (err) {
+        // Non-fatal — tracing must never break the main flow
+        console.warn('[db] insertAgentEvent failed (non-fatal):', err instanceof Error ? err.message : String(err));
+    }
+}
+
+export async function getSessionTrace(sessionId: string): Promise<{
+    events: AgentEvent[];
+    messages: unknown[];
+}> {
+    if (!isDBConfigured()) return { events: [], messages: [] };
+    const pool = getPool();
+    const [eventsResult, sessionResult] = await Promise.all([
+        pool.query<AgentEvent>(
+            `SELECT * FROM agent_events WHERE session_id = $1 ORDER BY timestamp ASC`,
+            [sessionId]
+        ),
+        pool.query<{ messages: unknown[] }>(
+            `SELECT messages FROM sessions WHERE id = $1 LIMIT 1`,
+            [sessionId]
+        ),
+    ]);
+    return {
+        events: eventsResult.rows,
+        messages: (sessionResult.rows[0]?.messages as unknown[]) ?? [],
+    };
 }
 
 export async function clearSession(id: string): Promise<void> {

@@ -6,6 +6,8 @@ import {
     upsertSession,
     resolveApprovalAndSaveSession,
 } from '../database/db.js';
+import { recordEvent } from '../telemetry/event_recorder.js';
+import { isSensitiveApprovalArg } from './tool_approval.js';
 import { getToolByName, getAllTools } from '../tools/tool_registry.js';
 import { decodeToolApprovalCommand } from './tool_approval.js';
 import { runAgentLoop } from '../agents/loop.js';
@@ -158,6 +160,21 @@ export async function resumeApprovedSession(
             return;
         }
         sessionVersion++;
+
+        recordEvent({
+            session_id: approval.session_id,
+            iteration: session.iteration ?? 0,
+            event_type: 'hitl_resolved',
+            tool_name: null,
+            args: null,
+            result_summary: rejectionReason ? `Rejected: ${rejectionReason}` : 'Rejected',
+            duration_ms: null,
+            success: false,
+            input_tokens: null,
+            output_tokens: null,
+            cache_read_tokens: null,
+            finish_reason: null,
+        });
 
         await runAgentLoop(
             {
@@ -312,6 +329,27 @@ export async function resumeApprovedSession(
     try {
         result = await tool.execute(toolArgs);
         console.log(`[resume] ✅ Tool complete: ${toolName} — success=${result.success}`);
+
+        // Redact sensitive args before recording
+        const redactedArgs: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(toolArgs)) {
+            redactedArgs[k] = isSensitiveApprovalArg(k) ? '[REDACTED]' : v;
+        }
+        recordEvent({
+            session_id: approval.session_id,
+            iteration: session.iteration ?? 0,
+            event_type: 'hitl_resolved',
+            tool_name: toolName,
+            args: redactedArgs,
+            result_summary: result.success ? 'Approved and executed' : `Execution failed: ${result.output.slice(0, 200)}`,
+            duration_ms: null,
+            success: result.success,
+            input_tokens: null,
+            output_tokens: null,
+            cache_read_tokens: null,
+            finish_reason: null,
+        });
+
         receipts[toolName] = {
             toolName,
             success: Boolean(result.success),

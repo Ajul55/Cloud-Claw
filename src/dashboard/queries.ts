@@ -334,3 +334,57 @@ export async function fetchBurnRate(range: BurnRange): Promise<{ bucket: string;
         tokens: Number(r.tokens),
     }));
 }
+
+export interface AgentEventRow {
+    id: number;
+    session_id: string;
+    iteration: number;
+    event_type: string;
+    tool_name: string | null;
+    args: Record<string, unknown> | null;
+    result_summary: string | null;
+    duration_ms: number | null;
+    success: boolean | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_tokens: number | null;
+    finish_reason: string | null;
+    timestamp: string;
+}
+
+export async function fetchSessionTrace(sessionId: string): Promise<{
+    events: AgentEventRow[];
+    messages: unknown[];
+    session: { id: string; channel: string; status: string; iteration: number; created_at: string } | null;
+}> {
+    const pool = getDashboardPool();
+    const [eventsRes, sessionRes] = await Promise.all([
+        pool.query<AgentEventRow>(
+            `SELECT id, session_id, iteration, event_type, tool_name, args,
+                    result_summary, duration_ms, success, input_tokens, output_tokens,
+                    cache_read_tokens, finish_reason, timestamp
+             FROM agent_events
+             WHERE session_id = $1
+             ORDER BY timestamp ASC`,
+            [sessionId]
+        ),
+        pool.query<{ id: string; channel: string; status: string; iteration: number; created_at: string; messages: unknown[] }>(
+            `SELECT id, channel, status, iteration, created_at, messages
+             FROM sessions WHERE id = $1 LIMIT 1`,
+            [sessionId]
+        ),
+    ]);
+
+    const row = sessionRes.rows[0] ?? null;
+    return {
+        events: eventsRes.rows,
+        messages: (row?.messages as unknown[]) ?? [],
+        session: row ? {
+            id: row.id,
+            channel: row.channel,
+            status: row.status,
+            iteration: row.iteration,
+            created_at: new Date(row.created_at).toISOString(),
+        } : null,
+    };
+}

@@ -25,7 +25,7 @@ All SSH output is sanitized for prompt injection and credential leaks before it 
 - **Human-in-the-loop (HITL)**: Tier-3 (write) actions pause for `/approve` or `/reject`. Slack sends interactive Block Kit buttons; Telegram sends command prompts
 - **4-layer guard architecture**: intent classification → pre-tool sequence enforcer → post-tool sanitizer → hallucination receipt auditor (see [Architecture](#architecture))
 - **Semantic fix memory**: past problem/fix pairs stored as vector embeddings (Voyage AI + pgvector) and retrieved at session start
-- **LLM provider-agnostic**: MiniMax M2.5, OpenAI, Anthropic (via LiteLLM proxy), or Groq — switchable at runtime
+- **LLM provider-agnostic**: MiniMax M2.7, OpenAI, Anthropic (via LiteLLM proxy), or Groq — switchable at runtime
 - **Multi-tenant**: each Slack/Telegram user registers their own Cloudstick credentials; SSH keys stored AES-256-GCM encrypted
 - **Private Cloudstick gateway**: server-to-server HTTP/SSE integration signed with HMAC-SHA256, never a browser-exposed bearer key
 - **SSH certificate auth**: optional CA-signed short-lived certificates instead of long-lived private keys

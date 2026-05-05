@@ -11,14 +11,14 @@
  * testable separately from loop.ts.
  *
  * RUNTIME LLM STACK:
- *   Primary  : MiniMax M2.5 (OpenAI-compatible SDK)
+ *   Primary  : MiniMax M2.7 (OpenAI-compatible SDK)
  *   Fallback : Claude Sonnet
  *   Builder  : Claude Code (used to build/maintain this project)
  *
  * WHAT THIS PROMPT ENFORCES AND WHY:
  *
  *   1. No narration before tool calls
- *      MiniMax M2.5 will narrate "I will now check nginx..." instead
+ *      MiniMax M2.7 will narrate "I will now check nginx..." instead
  *      of calling the tool when tool_choice is not forced. This prompt
  *      makes the contract explicit. The code also enforces tool_choice:
  *      'required' mid-chain. Both layers are needed.

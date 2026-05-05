@@ -9,6 +9,8 @@ export interface UsageData {
     latencyMs: number;
     toolName?: string;
     accountId?: string;
+    /** Routing path taken: 'primary' | 'deepseek' | 'deepseek_fallback' */
+    routingDecision?: string;
 }
 
 function calculateCost(model: string, tokensIn: number, tokensOut: number): number {

@@ -144,6 +144,28 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS users_platform_idx ON users (platform);
 CREATE INDEX IF NOT EXISTS users_platform_id_idx ON users (platform_id);
+-- ─── Agent Event Trace ───────────────────────────────────────────────────────
+-- Structured event log for post-incident debugging of agent sessions.
+CREATE TABLE IF NOT EXISTS agent_events (
+  id                SERIAL PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  iteration         INTEGER NOT NULL DEFAULT 0,
+  event_type        TEXT NOT NULL,
+  tool_name         TEXT,
+  args              JSONB,
+  result_summary    TEXT,
+  duration_ms       INTEGER,
+  success           BOOLEAN,
+  -- LLM call fields (populated only on llm_call_start / llm_call_complete)
+  input_tokens      INTEGER,
+  output_tokens     INTEGER,
+  cache_read_tokens INTEGER,
+  finish_reason     TEXT,
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_events_session_id_idx ON agent_events(session_id);
+CREATE INDEX IF NOT EXISTS agent_events_timestamp_idx  ON agent_events(timestamp DESC);
+
 -- ─── Dynamic Tool Registry ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tools (
   id          TEXT        PRIMARY KEY,
@@ -156,3 +178,30 @@ CREATE TABLE IF NOT EXISTS tools (
 );
 CREATE INDEX IF NOT EXISTS idx_tools_tenant ON tools (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools (enabled);
+
+-- ─── Dashboard Admin Auth ─────────────────────────────────────────────────────
+-- Internal admin accounts for the Cloud-Claw dashboard.
+-- Passwords are bcrypt-hashed (cost 12). Credentials NEVER stored in plaintext.
+CREATE TABLE IF NOT EXISTS dashboard_admins (
+  id               SERIAL      PRIMARY KEY,
+  username         VARCHAR(64) UNIQUE NOT NULL,
+  password_hash    TEXT        NOT NULL,           -- bcrypt, cost 12
+  role             VARCHAR(16) NOT NULL DEFAULT 'admin',
+  failed_attempts  INTEGER     NOT NULL DEFAULT 0,
+  locked_until     TIMESTAMPTZ,                    -- NULL = not locked
+  last_login_at    TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Dashboard login sessions (HTTP-only cookie, server-side)
+CREATE TABLE IF NOT EXISTS dashboard_sessions (
+  id          VARCHAR(64) PRIMARY KEY,             -- crypto.randomBytes(32).toString('hex')
+  admin_id    INTEGER     NOT NULL REFERENCES dashboard_admins(id) ON DELETE CASCADE,
+  ip          TEXT,
+  user_agent  TEXT,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dash_sessions_admin   ON dashboard_sessions(admin_id);
+CREATE INDEX IF NOT EXISTS idx_dash_sessions_expires ON dashboard_sessions(expires_at);

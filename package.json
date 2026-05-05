@@ -10,11 +10,13 @@
     "start": "npm run build:dashboard && npm run build && node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --dir src",
-    "db:init": "psql $DATABASE_URL -f src/database/schema.sql"
+    "db:init": "psql $DATABASE_URL -f src/database/schema.sql",
+    "db:seed-admin": "npx tsx scripts/seed-admin.ts"
   },
   "dependencies": {
     "@slack/bolt": "^4.6.0",
     "axios": "^1.13.6",
+    "bcrypt": "^6.0.0",
     "dotenv": "^16.4.5",
     "form-data": "^4.0.5",
     "grammy": "^1.31.0",
@@ -29,6 +31,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/node": "^22.13.5",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.10",
