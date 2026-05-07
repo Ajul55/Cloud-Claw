@@ -69,6 +69,14 @@ export function createSlackApp(): SlackAppInstance {
     const handleMessage = async (text: string | undefined, user: string | undefined, channel: string, say: any, client: any) => {
         if (!user || !text) return;
 
+        // Only process messages from the configured channel.
+        // The bot may be a member of other channels (e.g. Cloudstick alert channels)
+        // but should never act on messages from those channels.
+        if (env.SLACK_CHANNEL_ID && channel !== env.SLACK_CHANNEL_ID) {
+            logger.warn('[Slack] Ignored message from non-configured channel', { channel, configured: env.SLACK_CHANNEL_ID });
+            return;
+        }
+
         // Strip <@U12345> mentions from the text
         const cleanText = text.replace(/<@[^>]+>/g, '').trim();
         if (!cleanText) return;
