@@ -36,14 +36,16 @@ function parseCookies(req: http.IncomingMessage): Record<string, string> {
 }
 
 function setSessionCookie(res: http.ServerResponse, sessionId: string): void {
-    const isProd = process.env.NODE_ENV === 'production';
+    // Use COOKIE_SECURE=true only when dashboard is behind HTTPS.
+    // Defaulting to NODE_ENV=production breaks HTTP-only deployments.
+    const secureFlag = process.env.COOKIE_SECURE === 'true';
     const maxAge = SESSION_TTL_MS / 1000;
     const flags = [
         `HttpOnly`,
         `SameSite=Strict`,
         `Path=/`,
         `Max-Age=${maxAge}`,
-        isProd ? `Secure` : '',
+        secureFlag ? `Secure` : '',
     ].filter(Boolean).join('; ');
     res.setHeader('Set-Cookie', `dash_session=${sessionId}; ${flags}`);
 }
